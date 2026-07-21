@@ -21,13 +21,13 @@ cd /root/antizapret
 rm -rf download
 mkdir -p download
 
-UPDATE_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/update.sh
+UPDATE_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/update.sh
 UPDATE_PATH=update.sh
 
-PARSE_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/parse.sh
+PARSE_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/parse.sh
 PARSE_PATH=parse.sh
 
-DOALL_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/doall.sh
+DOALL_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/doall.sh
 DOALL_PATH=doall.sh
 
 DOMAIN_LINK=https://raw.githubusercontent.com/bol-van/rulist/refs/heads/main/reestr_hostname.txt
@@ -36,25 +36,25 @@ DOMAIN_PATH=download/bol-van-domain.txt
 DOMAIN2_LINK=https://antifilter.download/list/domains.lst
 DOMAIN2_PATH=download/antifilter-download-domain.txt
 
-RPZ_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/rpz.txt
+RPZ_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/rpz.txt
 RPZ_PATH=download/rpz.txt
 
-RPZ2_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/rpz2.txt
+RPZ2_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/rpz2.txt
 RPZ2_PATH=download/rpz2.txt
 
-INCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/include-hosts.txt
+INCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
 INCLUDE_HOSTS_PATH=download/include-hosts.txt
 
-EXCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/exclude-hosts.txt
+EXCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/exclude-hosts.txt
 EXCLUDE_HOSTS_PATH=download/exclude-hosts.txt
 
-REMOVE_HOSTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/remove-hosts.txt.gz
+REMOVE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/remove-hosts.txt.gz
 REMOVE_HOSTS_PATH=download/remove-hosts.txt.gz
 
-INCLUDE_ADBLOCK_HOSTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/include-adblock-hosts.txt
+INCLUDE_ADBLOCK_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-adblock-hosts.txt
 INCLUDE_ADBLOCK_HOSTS_PATH=download/include-adblock-hosts.txt
 
-EXCLUDE_ADBLOCK_HOSTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/exclude-adblock-hosts.txt
+EXCLUDE_ADBLOCK_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/exclude-adblock-hosts.txt
 EXCLUDE_ADBLOCK_HOSTS_PATH=download/exclude-adblock-hosts.txt
 
 ADGUARD_LINK=https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
@@ -63,37 +63,37 @@ ADGUARD_PATH=download/adguard.txt
 OISD_LINK=https://raw.githubusercontent.com/sjhgvr/oisd/refs/heads/main/domainswild2_small.txt
 OISD_PATH=download/oisd-include-adblock-hosts.txt
 
-DISCORD_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/discord-ips.txt
+DISCORD_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/discord-ips.txt
 DISCORD_IPS_PATH=download/discord-ips.txt
 
-CLOUDFLARE_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/cloudflare-ips.txt
+CLOUDFLARE_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/cloudflare-ips.txt
 CLOUDFLARE_IPS_PATH=download/cloudflare-ips.txt
 
-AMAZON_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/amazon-ips.txt
+AMAZON_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/amazon-ips.txt
 AMAZON_IPS_PATH=download/amazon-ips.txt
 
-HETZNER_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/hetzner-ips.txt
+HETZNER_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/hetzner-ips.txt
 HETZNER_IPS_PATH=download/hetzner-ips.txt
 
-DIGITALOCEAN_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/digitalocean-ips.txt
+DIGITALOCEAN_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/digitalocean-ips.txt
 DIGITALOCEAN_IPS_PATH=download/digitalocean-ips.txt
 
-OVH_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/ovh-ips.txt
+OVH_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/ovh-ips.txt
 OVH_IPS_PATH=download/ovh-ips.txt
 
-TELEGRAM_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/telegram-ips.txt
+TELEGRAM_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/telegram-ips.txt
 TELEGRAM_IPS_PATH=download/telegram-ips.txt
 
-GOOGLE_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/google-ips.txt
+GOOGLE_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/google-ips.txt
 GOOGLE_IPS_PATH=download/google-ips.txt
 
-AKAMAI_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/akamai-ips.txt
+AKAMAI_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/akamai-ips.txt
 AKAMAI_IPS_PATH=download/akamai-ips.txt
 
-WHATSAPP_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/whatsapp-ips.txt
+WHATSAPP_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/whatsapp-ips.txt
 WHATSAPP_IPS_PATH=download/whatsapp-ips.txt
 
-ROBLOX_IPS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download/roblox-ips.txt
+ROBLOX_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/roblox-ips.txt
 ROBLOX_IPS_PATH=download/roblox-ips.txt
 
 PROXY=https://api.codetabs.com/v1/proxy?quest=
