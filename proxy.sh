@@ -54,7 +54,7 @@ fi
 echo
 echo -e '\e[1;32mInstalling proxy for AntiZapret VPN server\e[0m'
 echo 'Proxied ports: 80, 443, 504, 508, 540, 580, 50080, 50443, 51080, 51443, 52080, 52443'
-echo 'More details: https://github.com/GubernievS/AntiZapret-VPN'
+echo 'More details: https://github.com/Nessusd/AntiZapret-VPN-ipv6'
 echo
 
 MTU=$(< /sys/class/net/$DEFAULT_INTERFACE/mtu)
@@ -109,10 +109,11 @@ if [[ "$SSH_PROTECTION" == 'y' ]]; then
 	apt-get purge -y sshguard
 fi
 
-# Отключим IPv6
-sysctl -w net.ipv6.conf.all.disable_ipv6=1
-sysctl -w net.ipv6.conf.default.disable_ipv6=1
-sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+# Включим IPv6
+rm -f /etc/sysctl.d/99-disable-ipv6.conf
+sysctl -w net.ipv6.conf.all.disable_ipv6=0
+sysctl -w net.ipv6.conf.default.disable_ipv6=0
+sysctl -w net.ipv6.conf.lo.disable_ipv6=0
 
 # Удаляем переопределённые параметры ядра
 sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
@@ -203,12 +204,6 @@ net.netfilter.nf_conntrack_udp_timeout=60
 net.netfilter.nf_conntrack_udp_timeout_stream=600
 net.netfilter.nf_conntrack_tcp_be_liberal=1
 " > /etc/sysctl.d/99-proxy.conf
-
-# Отключим IPv6
-echo "# Disable IPv6
-net.ipv6.conf.all.disable_ipv6=1
-net.ipv6.conf.default.disable_ipv6=1
-net.ipv6.conf.lo.disable_ipv6=1" > /etc/sysctl.d/99-disable-ipv6.conf
 
 # Очистка правил iptables
 iptables -w -F
