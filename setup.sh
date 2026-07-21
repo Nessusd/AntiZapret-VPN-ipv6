@@ -2,7 +2,7 @@
 #
 # Скрипт для установки на своём сервере AntiZapret VPN + полный VPN
 #
-# https://github.com/GubernievS/AntiZapret-VPN
+# https://github.com/Nessusd/AntiZapret-VPN-ipv6
 #
 export LC_ALL=C
 
@@ -81,7 +81,7 @@ fi
 echo
 echo -e '\e[1;32mInstalling AntiZapret VPN + full VPN...\e[0m'
 echo 'OpenVPN + WireGuard + AmneziaWG'
-echo 'More details: https://github.com/GubernievS/AntiZapret-VPN'
+echo 'More details: https://github.com/Nessusd/AntiZapret-VPN-ipv6'
 echo
 
 MTU=$(< /sys/class/net/$DEFAULT_INTERFACE/mtu)
@@ -343,10 +343,11 @@ rm -rf /etc/wireguard/templates/*
 make -C /usr/local/src/openvpn uninstall
 rm -rf /usr/local/src/openvpn
 
-# Отключим IPv6
-sysctl -w net.ipv6.conf.all.disable_ipv6=1
-sysctl -w net.ipv6.conf.default.disable_ipv6=1
-sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+# Включим IPv6
+rm -f /etc/sysctl.d/99-disable-ipv6.conf
+sysctl -w net.ipv6.conf.all.disable_ipv6=0
+sysctl -w net.ipv6.conf.default.disable_ipv6=0
+sysctl -w net.ipv6.conf.lo.disable_ipv6=0
 
 # Удаляем переопределённые параметры ядра
 sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
@@ -411,7 +412,7 @@ PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --force-reinstall --user /tmp
 
 # Клонируем репозиторий antizapret
 rm -rf /tmp/antizapret
-git clone https://github.com/GubernievS/AntiZapret-VPN.git /tmp/antizapret
+git clone https://github.com/Nessusd/AntiZapret-VPN-ipv6.git /tmp/antizapret
 
 # Сохраняем пользовательские настройки и обработчики custom*.sh
 cp /root/antizapret/config/*.txt /tmp/antizapret/setup/root/antizapret/config/ || true
