@@ -115,7 +115,7 @@ fi
 
 # Настраиваем IPv6
 IPV6_SYSCTL=/etc/sysctl.d/99-proxy-ipv6.conf
-rm -f /etc/sysctl.d/99-disable-ipv6.conf "$IPV6_SYSCTL"
+rm -f /etc/sysctl.d/99-disable-ipv6.conf /etc/sysctl.d/99-antizapret-ipv6.conf "$IPV6_SYSCTL"
 if [[ "$DISABLE_IPV6" == 'y' ]]; then
 	cat > "$IPV6_SYSCTL" <<'EOF'
 # IPv6 disabled by AntiZapret proxy installer

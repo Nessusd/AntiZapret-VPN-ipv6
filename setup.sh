@@ -104,6 +104,10 @@ until [[ "$WIREGUARD_ENABLE" =~ (y|n) ]]; do
 	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE
 done
 echo
+until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
+	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
+done
+echo
 echo 'Choose anti-censorship patch for OpenVPN (UDP only):'
 echo '    0) None        - Do not install anti-censorship patch, or remove if already installed'
 echo '    1) Strong      - Recommended by default'
@@ -343,11 +347,30 @@ rm -rf /etc/wireguard/templates/*
 make -C /usr/local/src/openvpn uninstall
 rm -rf /usr/local/src/openvpn
 
-# Включим IPv6
-rm -f /etc/sysctl.d/99-disable-ipv6.conf
-sysctl -w net.ipv6.conf.all.disable_ipv6=0
-sysctl -w net.ipv6.conf.default.disable_ipv6=0
-sysctl -w net.ipv6.conf.lo.disable_ipv6=0
+# Настраиваем IPv6
+IPV6_SYSCTL=/etc/sysctl.d/99-antizapret-ipv6.conf
+rm -f /etc/sysctl.d/99-disable-ipv6.conf /etc/sysctl.d/99-proxy-ipv6.conf "$IPV6_SYSCTL"
+if [[ "$DISABLE_IPV6" == 'y' ]]; then
+	cat > "$IPV6_SYSCTL" <<'EOF'
+# IPv6 disabled by AntiZapret installer
+net.ipv6.conf.all.forwarding=0
+net.ipv6.conf.default.forwarding=0
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+EOF
+else
+	cat > "$IPV6_SYSCTL" <<EOF
+# IPv6 enabled by AntiZapret installer
+net.ipv6.conf.all.disable_ipv6=0
+net.ipv6.conf.default.disable_ipv6=0
+net.ipv6.conf.lo.disable_ipv6=0
+net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.default.forwarding=1
+EOF
+fi
+sysctl -p "$IPV6_SYSCTL" || true
 
 # Удаляем переопределённые параметры ядра
 sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
@@ -448,6 +471,7 @@ echo "SETUP_DATE=$(date --iso-8601=seconds)
 OPENVPN_UDP_ENABLE=$OPENVPN_UDP_ENABLE
 OPENVPN_TCP_ENABLE=$OPENVPN_TCP_ENABLE
 WIREGUARD_ENABLE=$WIREGUARD_ENABLE
+DISABLE_IPV6=$DISABLE_IPV6
 OPENVPN_PATCH=$OPENVPN_PATCH
 OPENVPN_DCO=$OPENVPN_DCO
 ANTIZAPRET_WARP=$ANTIZAPRET_WARP
