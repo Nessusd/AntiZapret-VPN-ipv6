@@ -1,0 +1,84 @@
+name: Remove Telegram proxy support
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/remove-telegram-proxy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove Telegram-specific routing support
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          setup_path = Path("setup.sh")
+          setup = setup_path.read_text(encoding="utf-8")
+          prompt = """until [[ \"$TELEGRAM_INCLUDE\" =~ (y|n) ]]; do
+          \tread -rp $'Include Telegram IPs in \\001\\e[1;32m\\002AntiZapret VPN\\001\\e[0m\\002? [y/n]: ' -e -i y TELEGRAM_INCLUDE
+          done
+          echo
+          """
+          if setup.count(prompt) != 1:
+              raise SystemExit(f"Expected one Telegram prompt, found {setup.count(prompt)}")
+          setup = setup.replace(prompt, "", 1)
+
+          setting = "TELEGRAM_INCLUDE=$TELEGRAM_INCLUDE\n"
+          if setup.count(setting) != 1:
+              raise SystemExit(f"Expected one Telegram setting, found {setup.count(setting)}")
+          setup = setup.replace(setting, "", 1)
+          setup_path.write_text(setup, encoding="utf-8")
+
+          update_path = Path("setup/root/antizapret/update.sh")
+          update = update_path.read_text(encoding="utf-8")
+          variables = """TELEGRAM_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/telegram-ips.txt
+          TELEGRAM_IPS_PATH=download/telegram-ips.txt
+
+          """
+          if update.count(variables) != 1:
+              raise SystemExit(f"Expected one Telegram download block, found {update.count(variables)}")
+          update = update.replace(variables, "", 1)
+
+          condition = """\tif [[ \"$TELEGRAM_INCLUDE\" == 'y' ]]; then
+          \t\tdownload $TELEGRAM_IPS_PATH $TELEGRAM_IPS_LINK
+          \tfi
+
+          """
+          if update.count(condition) != 1:
+              raise SystemExit(f"Expected one Telegram conditional, found {update.count(condition)}")
+          update = update.replace(condition, "", 1)
+          update_path.write_text(update, encoding="utf-8")
+
+          Path("setup/root/antizapret/download/telegram-ips.txt").unlink()
+          PY
+
+      - name: Validate removal
+        shell: bash
+        run: |
+          bash -n setup.sh
+          bash -n setup/root/antizapret/update.sh
+          test ! -e setup/root/antizapret/download/telegram-ips.txt
+          ! grep -RniI --exclude-dir=.git -E 'TELEGRAM_INCLUDE|TELEGRAM_IPS|telegram-ips|Include Telegram IPs' .
+          test ! -s README.md
+          git diff --check
+
+      - name: Commit removal
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add setup.sh setup/root/antizapret/update.sh setup/root/antizapret/download/telegram-ips.txt
+          git commit -m "Remove Telegram proxy support"
+          git push origin HEAD:main
