@@ -71,6 +71,10 @@ do
 	break
 done
 echo
+until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
+	read -rp 'Disable IPv6 on this proxy server? [y/n]: ' -e -i n DISABLE_IPV6
+done
+echo
 echo 'Warning! SSH protection may block your IP after 5 logins/minute!'
 until [[ "$SSH_PROTECTION" =~ (y|n) ]]; do
 	read -rp 'Enable SSH brute-force protection? [y/n]: ' -e -i y SSH_PROTECTION
@@ -109,11 +113,30 @@ if [[ "$SSH_PROTECTION" == 'y' ]]; then
 	apt-get purge -y sshguard
 fi
 
-# Включим IPv6
-rm -f /etc/sysctl.d/99-disable-ipv6.conf
-sysctl -w net.ipv6.conf.all.disable_ipv6=0
-sysctl -w net.ipv6.conf.default.disable_ipv6=0
-sysctl -w net.ipv6.conf.lo.disable_ipv6=0
+# Настраиваем IPv6
+IPV6_SYSCTL=/etc/sysctl.d/99-proxy-ipv6.conf
+rm -f /etc/sysctl.d/99-disable-ipv6.conf "$IPV6_SYSCTL"
+if [[ "$DISABLE_IPV6" == 'y' ]]; then
+	cat > "$IPV6_SYSCTL" <<'EOF'
+# IPv6 disabled by AntiZapret proxy installer
+net.ipv6.conf.all.forwarding=0
+net.ipv6.conf.default.forwarding=0
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+EOF
+else
+	cat > "$IPV6_SYSCTL" <<EOF
+# IPv6 enabled by AntiZapret proxy installer
+net.ipv6.conf.all.disable_ipv6=0
+net.ipv6.conf.default.disable_ipv6=0
+net.ipv6.conf.lo.disable_ipv6=0
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.default.forwarding=1
+net.ipv6.conf.${DEFAULT_INTERFACE}.accept_ra=2
+EOF
+fi
+sysctl -p "$IPV6_SYSCTL" || true
 
 # Удаляем переопределённые параметры ядра
 sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
@@ -134,7 +157,7 @@ trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
 # Автоматически сохраним правила iptables
 echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
 
 # Обновляем систему и ставим необходимые пакеты
 export DEBIAN_FRONTEND=noninteractive
