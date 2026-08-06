@@ -95,8 +95,8 @@ jobs:
               1,
           )
           proxy = proxy.replace(
-              'net.ipv6.conf.${DEFAULT_INTERFACE}.accept_ra=2\nnet.ipv6.conf.all.forwarding=1',
-              'net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2\nnet.ipv6.conf.all.forwarding=1',
+              'net.ipv6.conf.${DEFAULT_INTERFACE}.accept_ra=2',
+              'net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2',
               1,
           )
           proxy_path.write_text(proxy, encoding="utf-8")
@@ -111,6 +111,8 @@ jobs:
           grep -Fq 'DISABLE_IPV6=$DISABLE_IPV6' setup.sh
           grep -Fq 'net.ipv6.conf.all.forwarding=1' setup.sh
           grep -Fq 'net.ipv6.conf.all.forwarding=1' proxy.sh
+          grep -Fq 'net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2' setup.sh
+          grep -Fq 'net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2' proxy.sh
           test ! -e setup/etc/sysctl.d/99-disable-ipv6.conf
           ! grep -R -n -F 'block-ipv6' setup/etc/openvpn
 
@@ -123,5 +125,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add setup.sh proxy.sh
-          git commit -m "Prepare installers for configurable IPv6"
+          git commit -m "Use interface-safe IPv6 sysctl key"
           git push origin HEAD:main
