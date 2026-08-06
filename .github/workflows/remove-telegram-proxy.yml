@@ -82,3 +82,5 @@ jobs:
           git add setup.sh setup/root/antizapret/update.sh setup/root/antizapret/download/telegram-ips.txt
           git commit -m "Remove Telegram proxy support"
           git push origin HEAD:main
+
+# one-time migration trigger
