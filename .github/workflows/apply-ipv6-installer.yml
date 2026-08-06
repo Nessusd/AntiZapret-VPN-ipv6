@@ -107,7 +107,7 @@ jobs:
         run: |
           bash -n setup.sh
           bash -n proxy.sh
-          grep -Fq "read -rp 'Disable IPv6 on this server? [y/n]:'" setup.sh
+          grep -Fq 'Disable IPv6 on this server? [y/n]:' setup.sh
           grep -Fq 'DISABLE_IPV6=$DISABLE_IPV6' setup.sh
           grep -Fq 'net.ipv6.conf.all.forwarding=1' setup.sh
           grep -Fq 'net.ipv6.conf.all.forwarding=1' proxy.sh
