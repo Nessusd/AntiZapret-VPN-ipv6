@@ -1,0 +1,12 @@
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
+# Файл автоматически сформирован внешним генератором IPv6-списков.
+# OVH IPv6 prefixes announced by AS16276
+# https://stat.ripe.net/data/ris-prefixes/data.json?resource=AS16276&list_prefixes=true&types=o&af=v6&noise=filter
+# RIPE RIS observed originating routes; not a complete legal-owner allocation list.
+
+2001:41d0::/32
+2402:1f00::/32
+2604:2dc0::/32
+2607:5300::/32
+
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!

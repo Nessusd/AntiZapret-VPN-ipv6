@@ -1,0 +1,10 @@
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
+# Файл автоматически сформирован внешним генератором IPv6-списков.
+# Roblox IPv6 prefixes announced by AS22697
+# https://stat.ripe.net/data/ris-prefixes/data.json?resource=AS22697&list_prefixes=true&types=o&af=v6&noise=filter
+# RIPE RIS observed originating routes; not a complete legal-owner allocation list.
+
+2620:2b:e000::/48
+2620:135:6000::/40
+
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!

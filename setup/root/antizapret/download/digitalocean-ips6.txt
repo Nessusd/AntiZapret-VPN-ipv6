@@ -1,0 +1,21 @@
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
+# Файл автоматически сформирован внешним генератором IPv6-списков.
+# DigitalOcean IPv6 prefixes announced by AS14061
+# https://stat.ripe.net/data/ris-prefixes/data.json?resource=AS14061&list_prefixes=true&types=o&af=v6&noise=filter
+# RIPE RIS observed originating routes; not a complete legal-owner allocation list.
+
+2400:6180::/48
+2400:6180:10::/48
+2400:6180:100::/40
+2604:a880::/47
+2604:a880:2::/48
+2604:a880:4::/46
+2604:a880:8::/48
+2604:a880:400::/48
+2604:a880:800::/48
+2604:a880:cad::/48
+2a03:b0c0::/46
+2a03:b0c0:fffc::/48
+2a03:b0c0:ffff::/48
+
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!

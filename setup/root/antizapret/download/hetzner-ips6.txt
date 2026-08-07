@@ -1,0 +1,12 @@
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
+# Файл автоматически сформирован внешним генератором IPv6-списков.
+# Hetzner IPv6 prefixes announced by AS24940
+# https://stat.ripe.net/data/ris-prefixes/data.json?resource=AS24940&list_prefixes=true&types=o&af=v6&noise=filter
+# RIPE RIS observed originating routes; not a complete legal-owner allocation list.
+
+2a01:4f8::/31
+2a01:4ff:ff01::/48
+2a06:be80::/29
+2a12:2240::/29
+
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!

@@ -1,0 +1,10 @@
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
+# Файл автоматически сформирован внешним генератором IPv6-списков.
+# Meta and WhatsApp IPv6 prefixes announced by AS32934
+# https://stat.ripe.net/data/ris-prefixes/data.json?resource=AS32934&list_prefixes=true&types=o&af=v6&noise=filter
+# This intentionally includes all AS32934 Meta originating routes.
+
+2620:0:1c00::/40
+2a03:2880::/32
+
+# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
