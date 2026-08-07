@@ -127,6 +127,7 @@ function download {
 }
 
 function download_ipv6_list {
+	[[ "${DISABLE_IPV6:-n}" == 'y' ]] && return 0
 	local name="$1"
 	download "download/${name}-ips6.txt" "$IPV6_LISTS_LINK/${name}-ips6.txt"
 }
