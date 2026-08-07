@@ -64,7 +64,7 @@ def write_result(filename: str, networks: set[ipaddress.IPv6Network]) -> None:
 
 
 def downloaded_networks(refresh_download: bool) -> set[ipaddress.IPv6Network]:
-    download_paths = matching_paths(["download/*ips.txt"])
+    download_paths = matching_paths(["download/*ips.txt", "download/*ips6.txt"])
     if refresh_download or download_paths:
         networks = read_paths(download_paths)
         write_file(DOWNLOAD_CACHE, networks)

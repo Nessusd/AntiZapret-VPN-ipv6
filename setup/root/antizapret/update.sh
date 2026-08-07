@@ -96,6 +96,8 @@ WHATSAPP_IPS_PATH=download/whatsapp-ips.txt
 ROBLOX_IPS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/roblox-ips.txt
 ROBLOX_IPS_PATH=download/roblox-ips.txt
 
+IPV6_LISTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/download
+
 PROXY=https://api.codetabs.com/v1/proxy?quest=
 
 function download {
@@ -122,6 +124,11 @@ function download {
 	elif [[ "$path" == *.gz ]]; then
 		gunzip -f "$path" || > "${path%.gz}"
 	fi
+}
+
+function download_ipv6_list {
+	local name="$1"
+	download "download/${name}-ips6.txt" "$IPV6_LISTS_LINK/${name}-ips6.txt"
 }
 
 download $UPDATE_PATH $UPDATE_LINK
@@ -164,30 +171,37 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 
 	if [[ "$CLOUDFLARE_INCLUDE" == 'y' ]]; then
 		download $CLOUDFLARE_IPS_PATH $CLOUDFLARE_IPS_LINK
+		download_ipv6_list cloudflare
 	fi
 
 	if [[ "$AMAZON_INCLUDE" == 'y' ]]; then
 		download $AMAZON_IPS_PATH $AMAZON_IPS_LINK
+		download_ipv6_list amazon
 	fi
 
 	if [[ "$HETZNER_INCLUDE" == 'y' ]]; then
 		download $HETZNER_IPS_PATH $HETZNER_IPS_LINK
+		download_ipv6_list hetzner
 	fi
 
 	if [[ "$DIGITALOCEAN_INCLUDE" == 'y' ]]; then
 		download $DIGITALOCEAN_IPS_PATH $DIGITALOCEAN_IPS_LINK
+		download_ipv6_list digitalocean
 	fi
 
 	if [[ "$OVH_INCLUDE" == 'y' ]]; then
 		download $OVH_IPS_PATH $OVH_IPS_LINK
+		download_ipv6_list ovh
 	fi
 
 	if [[ "$TELEGRAM_INCLUDE" == 'y' ]]; then
 		download $TELEGRAM_IPS_PATH $TELEGRAM_IPS_LINK
+		download_ipv6_list telegram
 	fi
 
 	if [[ "$GOOGLE_INCLUDE" == 'y' ]]; then
 		download $GOOGLE_IPS_PATH $GOOGLE_IPS_LINK
+		download_ipv6_list google
 	fi
 
 	if [[ "$AKAMAI_INCLUDE" == 'y' ]]; then
@@ -196,10 +210,12 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 
 	if [[ "$WHATSAPP_INCLUDE" == 'y' ]]; then
 		download $WHATSAPP_IPS_PATH $WHATSAPP_IPS_LINK
+		download_ipv6_list whatsapp
 	fi
 
 	if [[ "$ROBLOX_INCLUDE" == 'y' ]]; then
 		download $ROBLOX_IPS_PATH $ROBLOX_IPS_LINK
+		download_ipv6_list roblox
 	fi
 fi
 
