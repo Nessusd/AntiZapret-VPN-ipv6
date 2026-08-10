@@ -107,6 +107,7 @@ echo
 until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
 	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
 done
+VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX:-${WIREGUARD_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}"
 echo
 echo 'Choose anti-censorship patch for OpenVPN (UDP only):'
 echo '    0) None        - Do not install anti-censorship patch, or remove if already installed'
@@ -472,6 +473,7 @@ OPENVPN_UDP_ENABLE=$OPENVPN_UDP_ENABLE
 OPENVPN_TCP_ENABLE=$OPENVPN_TCP_ENABLE
 WIREGUARD_ENABLE=$WIREGUARD_ENABLE
 DISABLE_IPV6=$DISABLE_IPV6
+VPN_IPV6_PREFIX=$VPN_IPV6_PREFIX
 OPENVPN_PATCH=$OPENVPN_PATCH
 OPENVPN_DCO=$OPENVPN_DCO
 ANTIZAPRET_WARP=$ANTIZAPRET_WARP
@@ -601,6 +603,17 @@ if [[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]]; then
 else
 	find /etc/wireguard -name '*.conf' -exec sed -i 's/s = 172\./s = 10\./g' {} +
 fi
+
+# Добавляем или удаляем управляемую IPv6-конфигурацию OpenVPN.
+[[ "$DISABLE_IPV6" == 'y' ]] && OPENVPN_IPV6_ACTION=strip || OPENVPN_IPV6_ACTION=migrate
+for OPENVPN_MODE in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+	python3 /root/antizapret/openvpn-ipv6.py --prefix "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" \
+		"$OPENVPN_IPV6_ACTION" "$OPENVPN_MODE" "/etc/openvpn/server/$OPENVPN_MODE.conf" --check >/dev/null
+done
+for OPENVPN_MODE in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+	python3 /root/antizapret/openvpn-ipv6.py --prefix "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" \
+		"$OPENVPN_IPV6_ACTION" "$OPENVPN_MODE" "/etc/openvpn/server/$OPENVPN_MODE.conf" >/dev/null
+done
 
 # Запрещаем несколько одновременных подключений к OpenVPN для одного клиента
 if [[ "$OPENVPN_DUPLICATE" == 'n' ]]; then

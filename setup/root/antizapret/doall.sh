@@ -5,6 +5,7 @@ SECONDS=0
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 SYSTEMD_DIR="${ANTIZAPRET_SYSTEMD_DIR:-/etc/systemd/system}"
 cd "$ROOT_DIR"
+source setup
 
 FIREWALL6_CHANGED=n
 FIREWALL6_BASE=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main
@@ -56,6 +57,10 @@ if [[ "$SUM1" != "$SUM2" ]]; then
 	cat update.sh | bash -s "$1"
 fi
 ./parse.sh "$1"
+
+if [[ "${DISABLE_IPV6:-n}" == 'y' ]]; then
+	./firewall6-lists.py --disable-openvpn
+fi
 
 case "${1:-}" in
 	''|ip|ips|noclear|noclean) IPV6_LIST_MODE=download ;;

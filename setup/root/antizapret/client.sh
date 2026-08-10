@@ -35,6 +35,10 @@ umask 022
 OPTION="$1"
 CLIENT_NAME="$2"
 CLIENT_CERT_EXPIRE="$3"
+VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX:-${WIREGUARD_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}"
+WIREGUARD_IPV6_PREFIX="$VPN_IPV6_PREFIX"
+WIREGUARD_IPV6_HELPER="${WIREGUARD_IPV6_HELPER:-/root/antizapret/wireguard-ipv6.py}"
+OPENVPN_IPV6_HELPER="${OPENVPN_IPV6_HELPER:-/root/antizapret/openvpn-ipv6.py}"
 
 askClientName(){
 	if ! [[ "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]{1,32}$ ]]; then
@@ -80,6 +84,80 @@ render() {
 	done < "$1"
 }
 
+prepareWireGuardIPv6(){
+	WIREGUARD_SERVER_IPV6=
+	WIREGUARD_CLIENT_IPV6=
+	WIREGUARD_IPV6_ROUTES=
+	[[ "${DISABLE_IPV6:-n}" == 'y' ]] && return
+
+	if [[ ! -f "$WIREGUARD_IPV6_HELPER" ]]; then
+		echo "WireGuard IPv6 helper not found: $WIREGUARD_IPV6_HELPER"
+		exit 9
+	fi
+	WIREGUARD_IPV6_NETWORK="$(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" network "$1")"
+	WIREGUARD_SERVER_IPV6=", $(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" server-address "$1")"
+	if [[ "$1" == 'vpn' ]]; then
+		WIREGUARD_IPV6_ROUTES=', ::/0'
+	else
+		WIREGUARD_IPV6_ROUTES=", $WIREGUARD_IPV6_NETWORK"
+	fi
+}
+
+setWireGuardClientIPv6(){
+	WIREGUARD_CLIENT_IPV6=
+	[[ "${DISABLE_IPV6:-n}" == 'y' ]] && return
+	WIREGUARD_CLIENT_IPV6=", $(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" client-address "$1" "$2")"
+}
+
+migrateWireGuardIPv6(){
+	local mode config result server_address action=migrate
+	[[ "${DISABLE_IPV6:-n}" == 'y' ]] && action=strip
+	if [[ ! -f "$WIREGUARD_IPV6_HELPER" ]]; then
+		echo "WireGuard IPv6 helper not found: $WIREGUARD_IPV6_HELPER"
+		exit 9
+	fi
+	# Validate the whole pair before changing either configuration.
+	for mode in antizapret vpn; do
+		config="/etc/wireguard/$mode.conf"
+		[[ -f "$config" ]] || continue
+		python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" "$action" "$mode" "$config" --check >/dev/null
+	done
+	for mode in antizapret vpn; do
+		config="/etc/wireguard/$mode.conf"
+		[[ -f "$config" ]] || continue
+		result="$(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" "$action" "$mode" "$config")"
+		[[ "$result" == 'updated' ]] || continue
+		server_address="$(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" server-address "$mode")"
+		if ip link show dev "$mode" &>/dev/null; then
+			if [[ "$action" == 'migrate' ]]; then
+				ip -6 address show dev "$mode" | grep -Fq "${server_address%/*}/" || ip -6 address add "$server_address" dev "$mode"
+			else
+				ip -6 address show dev "$mode" | grep -Fq "${server_address%/*}/" && ip -6 address del "$server_address" dev "$mode"
+			fi
+			wg syncconf "$mode" <(wg-quick strip "$mode" 2>/dev/null) &>/dev/null || true
+		fi
+	done
+}
+
+migrateOpenVPNIPv6(){
+	local mode config action=migrate
+	[[ "${DISABLE_IPV6:-n}" == 'y' ]] && action=strip
+	if [[ ! -f "$OPENVPN_IPV6_HELPER" ]]; then
+		echo "OpenVPN IPv6 helper not found: $OPENVPN_IPV6_HELPER"
+		exit 10
+	fi
+	for mode in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+		config="/etc/openvpn/server/$mode.conf"
+		[[ -f "$config" ]] || continue
+		python3 "$OPENVPN_IPV6_HELPER" --prefix "$VPN_IPV6_PREFIX" "$action" "$mode" "$config" --check >/dev/null
+	done
+	for mode in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+		config="/etc/openvpn/server/$mode.conf"
+		[[ -f "$config" ]] || continue
+		python3 "$OPENVPN_IPV6_HELPER" --prefix "$VPN_IPV6_PREFIX" "$action" "$mode" "$config" >/dev/null
+	done
+}
+
 initOpenVPN(){
 	mkdir -p /etc/openvpn/easyrsa3
 	mkdir -p /etc/openvpn/server/ccd
@@ -94,6 +172,8 @@ initOpenVPN(){
 		EASYRSA_CA_EXPIRE=3650 /usr/share/easy-rsa/easyrsa --batch --req-cn='AntiZapret CA' build-ca nopass
 		EASYRSA_CERT_EXPIRE=3650 /usr/share/easy-rsa/easyrsa --batch build-server-full 'antizapret-server' nopass
 	fi
+
+	migrateOpenVPNIPv6
 
 	EASYRSA_CRL_DAYS=3650 /usr/share/easy-rsa/easyrsa gen-crl
 	chmod 644 /etc/openvpn/easyrsa3/pki/crl.pem
@@ -172,6 +252,7 @@ listOpenVPN(){
 }
 
 initWireGuard(){
+	prepareWireGuardIPv6 antizapret
 	if [[ ! -f /etc/wireguard/key ]]; then
 		echo
 		echo 'Generating WireGuard/AmneziaWG server keys'
@@ -180,13 +261,16 @@ initWireGuard(){
 		echo "PRIVATE_KEY=${PRIVATE_KEY}
 PUBLIC_KEY=${PUBLIC_KEY}" > /etc/wireguard/key
 		render "/etc/wireguard/templates/antizapret.conf" > "/etc/wireguard/antizapret.conf"
+		prepareWireGuardIPv6 vpn
 		render "/etc/wireguard/templates/vpn.conf" > "/etc/wireguard/vpn.conf"
 	fi
+	migrateWireGuardIPv6
 }
 
 addWireGuard(){
 	setServerHost_FileName "$WIREGUARD_HOST"
 	echo
+	migrateWireGuardIPv6
 
 	source /etc/wireguard/key
 	IPS="$(cat /etc/wireguard/ips)"
@@ -199,7 +283,7 @@ addWireGuard(){
 		CLIENT_PRIVATE_KEY="$(echo "$CLIENT_BLOCK" | grep '# PrivateKey =' | cut -d '=' -f 2- | sed 's/ //g')"
 		CLIENT_PUBLIC_KEY="$(echo "$CLIENT_BLOCK" | grep 'PublicKey =' | cut -d '=' -f 2- | sed 's/ //g')"
 		CLIENT_PRESHARED_KEY="$(echo "$CLIENT_BLOCK" | grep 'PresharedKey =' | cut -d '=' -f 2- | sed 's/ //g')"
-		CLIENT_IP="$(echo "$CLIENT_BLOCK" | grep 'AllowedIPs =' | cut -d '=' -f 2- | sed 's/ //g' | cut -d '/' -f 1)"
+		CLIENT_IP="$(echo "$CLIENT_BLOCK" | grep 'AllowedIPs =' | cut -d '=' -f 2- | sed 's/ //g' | cut -d ',' -f 1 | cut -d '/' -f 1)"
 		echo 'Client (AntiZapret) with that name already exists! Please enter different name for new client'
 	else
 		CLIENT_PRIVATE_KEY="$(wg genkey)"
@@ -216,16 +300,19 @@ addWireGuard(){
 				exit 5
 			fi
 		done
+		setWireGuardClientIPv6 antizapret "$CLIENT_IP"
 		echo "# Client = ${CLIENT_NAME}
 # PrivateKey = ${CLIENT_PRIVATE_KEY}
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
 PresharedKey = ${CLIENT_PRESHARED_KEY}
-AllowedIPs = ${CLIENT_IP}/32
+AllowedIPs = ${CLIENT_IP}/32${WIREGUARD_CLIENT_IPV6}
 " >> "/etc/wireguard/antizapret.conf"
 		wg syncconf antizapret <(wg-quick strip antizapret 2>/dev/null) &>/dev/null || true
 	fi
 
+	prepareWireGuardIPv6 antizapret
+	setWireGuardClientIPv6 antizapret "$CLIENT_IP"
 	render "/etc/wireguard/templates/antizapret-client-wg.conf" > "/root/antizapret/client/wireguard/antizapret/antizapret-$FILE_NAME-wg.conf"
 	render "/etc/wireguard/templates/antizapret-client-am.conf" > "/root/antizapret/client/amneziawg/antizapret/antizapret-$FILE_NAME-am.conf"
 
@@ -236,7 +323,7 @@ AllowedIPs = ${CLIENT_IP}/32
 		CLIENT_PRIVATE_KEY="$(echo "$CLIENT_BLOCK" | grep '# PrivateKey =' | cut -d '=' -f 2- | sed 's/ //g')"
 		CLIENT_PUBLIC_KEY="$(echo "$CLIENT_BLOCK" | grep 'PublicKey =' | cut -d '=' -f 2- | sed 's/ //g')"
 		CLIENT_PRESHARED_KEY="$(echo "$CLIENT_BLOCK" | grep 'PresharedKey =' | cut -d '=' -f 2- | sed 's/ //g')"
-		CLIENT_IP="$(echo "$CLIENT_BLOCK" | grep 'AllowedIPs =' | cut -d '=' -f 2- | sed 's/ //g' | cut -d '/' -f 1)"
+		CLIENT_IP="$(echo "$CLIENT_BLOCK" | grep 'AllowedIPs =' | cut -d '=' -f 2- | sed 's/ //g' | cut -d ',' -f 1 | cut -d '/' -f 1)"
 		echo 'Client (VPN) with that name already exists! Please enter different name for new client'
 	else
 		CLIENT_PRIVATE_KEY="$(wg genkey)"
@@ -253,16 +340,19 @@ AllowedIPs = ${CLIENT_IP}/32
 				exit 6
 			fi
 		done
+		setWireGuardClientIPv6 vpn "$CLIENT_IP"
 		echo "# Client = ${CLIENT_NAME}
 # PrivateKey = ${CLIENT_PRIVATE_KEY}
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
 PresharedKey = ${CLIENT_PRESHARED_KEY}
-AllowedIPs = ${CLIENT_IP}/32
+AllowedIPs = ${CLIENT_IP}/32${WIREGUARD_CLIENT_IPV6}
 " >> "/etc/wireguard/vpn.conf"
 		wg syncconf vpn <(wg-quick strip vpn 2>/dev/null) &>/dev/null || true
 	fi
 
+	prepareWireGuardIPv6 vpn
+	setWireGuardClientIPv6 vpn "$CLIENT_IP"
 	render "/etc/wireguard/templates/vpn-client-wg.conf" > "/root/antizapret/client/wireguard/vpn/vpn-$FILE_NAME-wg.conf"
 	render "/etc/wireguard/templates/vpn-client-am.conf" > "/root/antizapret/client/amneziawg/vpn/vpn-$FILE_NAME-am.conf"
 
