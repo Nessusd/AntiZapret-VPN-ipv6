@@ -16,6 +16,8 @@ from typing import Sequence
 
 DEFAULT_PREFIX = "fd3a:c9bc:6bcb::/48"
 MODE_SUBNETS = {"antizapret": 0x2908, "vpn": 0x2808}
+FAKE_SUBNET = 0x29FF
+FAKE_PREFIX_LENGTH = 96
 ASSIGNMENT_RE = re.compile(
     r"^(?P<prefix>\s*)(?P<name>Address|AllowedIPs)"
     r"(?P<separator>\s*=\s*)(?P<value>.*?)(?P<newline>\r?\n)?$"
@@ -45,6 +47,13 @@ def mode_network(prefix: str, mode: str) -> ipaddress.IPv6Network:
     except KeyError as exc:
         raise MigrationError(f"unsupported WireGuard mode: {mode}") from exc
     return ipaddress.IPv6Network((int(base.network_address) | (subnet_id << 64), 64))
+
+
+def fake_network(prefix: str) -> ipaddress.IPv6Network:
+    base = parse_base_prefix(prefix)
+    return ipaddress.IPv6Network(
+        (int(base.network_address) | (FAKE_SUBNET << 64), FAKE_PREFIX_LENGTH)
+    )
 
 
 def server_address(prefix: str, mode: str) -> ipaddress.IPv6Interface:
@@ -305,6 +314,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     for command in ("network", "server-address"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("mode", choices=sorted(MODE_SUBNETS))
+    subparsers.add_parser("fake-network")
     client_parser = subparsers.add_parser("client-address")
     client_parser.add_argument("mode", choices=sorted(MODE_SUBNETS))
     client_parser.add_argument("ipv4")
@@ -322,6 +332,8 @@ def run(argv: Sequence[str]) -> int:
     args = parse_args(argv)
     if args.command == "network":
         print(mode_network(args.prefix, args.mode))
+    elif args.command == "fake-network":
+        print(fake_network(args.prefix))
     elif args.command == "server-address":
         print(server_address(args.prefix, args.mode))
     elif args.command == "client-address":

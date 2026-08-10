@@ -5,6 +5,7 @@ export LC_ALL=C
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 cd "$ROOT_DIR"
 source setup
+export DISABLE_IPV6 VPN_IPV6_PREFIX
 
 DISABLE_IPV6="${DISABLE_IPV6:-n}"
 ANTIZAPRET_IPV6_IN_INTERFACE="${ANTIZAPRET_IPV6_IN_INTERFACE:-antizapret+}"
@@ -42,8 +43,21 @@ OUTPUT_CHAIN=ANTIZAPRET6-OUTPUT
 MARK_CHAIN=ANTIZAPRET6-MARK
 PREROUTING_CHAIN=ANTIZAPRET6-PREROUTING
 POSTROUTING_CHAIN=ANTIZAPRET6-POSTROUTING
+MAPPING_CHAIN=ANTIZAPRET6-MAPPING
 ANTIZAPRET_MARK=0x10000000/0x30000000
 VPN_MARK=0x20000000/0x30000000
+FAKE_IPV6_NETWORK="$(python3 - "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" <<'PY'
+import ipaddress
+import sys
+
+prefix = ipaddress.ip_network(sys.argv[1], strict=True)
+if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:
+    raise SystemExit("VPN_IPV6_PREFIX must be an IPv6 /48 network")
+if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
+    raise SystemExit("VPN_IPV6_PREFIX must be a private ULA /48 network")
+print(ipaddress.IPv6Network((int(prefix.network_address) | (0x29FF << 64), 96)))
+PY
+)"
 
 ip6t() { ip6tables -w "$@"; }
 

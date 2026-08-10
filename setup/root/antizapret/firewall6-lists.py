@@ -16,6 +16,26 @@ OPENVPN_DEFAULT = Path(
 )
 OPENVPN_BEGIN = "# BEGIN ANTIZAPRET MANAGED IPV6 ROUTES"
 OPENVPN_END = "# END ANTIZAPRET MANAGED IPV6 ROUTES"
+DEFAULT_IPV6_PREFIX = "fd3a:c9bc:6bcb::/48"
+FAKE_IPV6_SUBNET = 0x29FF
+FAKE_IPV6_PREFIX_LENGTH = 96
+
+
+def fake_ipv6_network(prefix: str) -> ipaddress.IPv6Network:
+    try:
+        network = ipaddress.ip_network(prefix, strict=True)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid VPN IPv6 prefix {prefix!r}: {exc}") from exc
+    if not isinstance(network, ipaddress.IPv6Network) or network.prefixlen != 48:
+        raise RuntimeError("VPN IPv6 prefix must be an IPv6 /48 network")
+    if not network.subnet_of(ipaddress.IPv6Network("fc00::/7")):
+        raise RuntimeError("VPN IPv6 prefix must be a private ULA /48 network")
+    return ipaddress.IPv6Network(
+        (
+            int(network.network_address) | (FAKE_IPV6_SUBNET << 64),
+            FAKE_IPV6_PREFIX_LENGTH,
+        )
+    )
 
 
 def read_paths(paths: list[Path]) -> set[ipaddress.IPv6Network]:
@@ -73,6 +93,7 @@ def write_openvpn_routes(
     networks: set[ipaddress.IPv6Network],
     *,
     enabled: bool = True,
+    fake_network: ipaddress.IPv6Network | None = None,
 ) -> None:
     mode = 0o644
     try:
@@ -99,6 +120,10 @@ def write_openvpn_routes(
         retained.extend(
             f'push "route-ipv6 {item.with_prefixlen}"' for item in ordered(networks)
         )
+        # RouterOS 7.19 retains only the final repeated route-ipv6 option.
+        # Keeping the domain-mapping prefix last preserves domain lists there.
+        if fake_network is not None and fake_network not in networks:
+            retained.append(f'push "route-ipv6 {fake_network.with_prefixlen}"')
         retained.extend([OPENVPN_END])
     retained.append("")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -133,9 +158,12 @@ def main() -> int:
     refresh_download = len(sys.argv) == 2
     route = downloaded_networks(refresh_download) | read_networks(["config/*include-ips.txt"])
     route.difference_update(read_networks(["config/*exclude-ips.txt"]))
+    fake_network = fake_ipv6_network(
+        os.environ.get("VPN_IPV6_PREFIX") or DEFAULT_IPV6_PREFIX
+    )
 
     write_result("route-ips6.txt", route)
-    write_openvpn_routes(OPENVPN_DEFAULT, route)
+    write_openvpn_routes(OPENVPN_DEFAULT, route, fake_network=fake_network)
     write_result("allow-ips6.txt", read_networks(["config/*allow-ips.txt"]))
     write_result("deny-ips6.txt", read_networks(["config/*deny-ips.txt"]))
     write_result("drop-ips6.txt", read_networks(["config/*drop-ips.txt"]))

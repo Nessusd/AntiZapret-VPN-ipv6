@@ -9,12 +9,14 @@ firewall_up() {
 	ip6t -t mangle -N "$MARK_CHAIN"
 	ip6t -t nat -N "$PREROUTING_CHAIN"
 	ip6t -t nat -N "$POSTROUTING_CHAIN"
+	ip6t -t nat -S "$MAPPING_CHAIN" &>/dev/null || ip6t -t nat -N "$MAPPING_CHAIN"
 	insert_after_invalid INPUT "$INPUT_CHAIN"
 	insert_after_invalid FORWARD "$FORWARD_CHAIN"
 	insert_after_invalid OUTPUT "$OUTPUT_CHAIN"
 	ip6t -t mangle -I PREROUTING 1 -j "$MARK_CHAIN"
 	ip6t -t nat -I PREROUTING 1 -j "$PREROUTING_CHAIN"
 	ip6t -t nat -I POSTROUTING 1 -j "$POSTROUTING_CHAIN"
+	ip6t -t nat -A "$PREROUTING_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -d "$FAKE_IPV6_NETWORK" -j "$MAPPING_CHAIN"
 
 	if [[ -n "$PUBLIC_INTERFACE6" ]]; then
 		ip6t -t filter -A "$INPUT_CHAIN" -i "$PUBLIC_INTERFACE6" -m set --match-set antizapret-deny6 src -j DROP
@@ -40,7 +42,7 @@ firewall_up() {
 	fi
 
 	if [[ "${RESTRICT_FORWARD:-n}" == 'y' ]]; then
-		ip6t -t filter -A "$FORWARD_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -m set ! --match-set antizapret-forward6 dst -j DROP
+		ip6t -t filter -A "$FORWARD_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -m conntrack ! --ctstate DNAT -m set ! --match-set antizapret-forward6 dst -j DROP
 	fi
 	ip6t -t filter -A "$FORWARD_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -m set --match-set antizapret-drop6 dst -j DROP
 	ip6t -t filter -A "$FORWARD_CHAIN" -i "$VPN_IPV6_IN_INTERFACE" -m set --match-set antizapret-drop6 dst -j DROP

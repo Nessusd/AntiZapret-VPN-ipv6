@@ -5,6 +5,7 @@ Wants=network-online.target
 PartOf=systemd-networkd.service
 
 [Service]
+EnvironmentFile=-/root/antizapret/setup
 LimitNPROC=infinity
 TasksMax=infinity
 LimitNOFILE=infinity

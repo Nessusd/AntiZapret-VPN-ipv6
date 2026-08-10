@@ -6,6 +6,7 @@ ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 SYSTEMD_DIR="${ANTIZAPRET_SYSTEMD_DIR:-/etc/systemd/system}"
 cd "$ROOT_DIR"
 source setup
+export DISABLE_IPV6 VPN_IPV6_PREFIX
 
 FIREWALL6_CHANGED=n
 FIREWALL6_BASE=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main

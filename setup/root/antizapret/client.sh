@@ -101,6 +101,7 @@ prepareWireGuardIPv6(){
 		WIREGUARD_IPV6_ROUTES=', ::/0'
 	else
 		WIREGUARD_IPV6_ROUTES=", $WIREGUARD_IPV6_NETWORK"
+		WIREGUARD_IPV6_ROUTES+=", $(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" fake-network)"
 		if [[ -f /root/antizapret/result/route-ips6.txt ]]; then
 			while IFS= read -r route; do
 				[[ -n "$route" ]] && WIREGUARD_IPV6_ROUTES+=", $route"
