@@ -85,6 +85,7 @@ render() {
 }
 
 prepareWireGuardIPv6(){
+	local route
 	WIREGUARD_SERVER_IPV6=
 	WIREGUARD_CLIENT_IPV6=
 	WIREGUARD_IPV6_ROUTES=
@@ -100,6 +101,11 @@ prepareWireGuardIPv6(){
 		WIREGUARD_IPV6_ROUTES=', ::/0'
 	else
 		WIREGUARD_IPV6_ROUTES=", $WIREGUARD_IPV6_NETWORK"
+		if [[ -f /root/antizapret/result/route-ips6.txt ]]; then
+			while IFS= read -r route; do
+				[[ -n "$route" ]] && WIREGUARD_IPV6_ROUTES+=", $route"
+			done < /root/antizapret/result/route-ips6.txt
+		fi
 	fi
 }
 
