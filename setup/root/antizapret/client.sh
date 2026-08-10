@@ -2,7 +2,7 @@
 #
 # Добавление/удаление клиента
 #
-# chmod +x client.sh && ./client.sh [1-9] [имя_клиента] [срок_действия_сертификата]
+# chmod +x client.sh && ./client.sh [1-9] [имя_клиента] [срок_действия_сертификата] [маршрутизируемый_IPv6-префикс]
 #
 # Срок действия сертификата в днях - только для OpenVPN
 #
@@ -17,8 +17,9 @@ handle_error() {
 }
 trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
-if (( $# > 3 )); then
-	echo 'Too many parameters! Usage: ./client.sh [1-9] [client_name] [cert_expire_days]'
+ARGUMENT_COUNT=$#
+if (( ARGUMENT_COUNT > 4 )); then
+	echo 'Too many parameters! Usage: ./client.sh [1-9] [client_name] [cert_expire_days] [routed_ipv6_prefix]'
 	exit 2
 fi
 
@@ -31,14 +32,19 @@ fi
 export EASYRSA_PKI=/etc/openvpn/easyrsa3/pki
 cd /root/antizapret
 source setup
+export DISABLE_IPV6
 umask 022
 OPTION="$1"
 CLIENT_NAME="$2"
 CLIENT_CERT_EXPIRE="$3"
+CLIENT_IPV6_PREFIX="${4-}"
+CLIENT_IPV6_PREFIX_SET=n
+(( ARGUMENT_COUNT == 4 )) && CLIENT_IPV6_PREFIX_SET=y
 VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX:-${WIREGUARD_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}"
 WIREGUARD_IPV6_PREFIX="$VPN_IPV6_PREFIX"
 WIREGUARD_IPV6_HELPER="${WIREGUARD_IPV6_HELPER:-/root/antizapret/wireguard-ipv6.py}"
 OPENVPN_IPV6_HELPER="${OPENVPN_IPV6_HELPER:-/root/antizapret/openvpn-ipv6.py}"
+OPENVPN_LISTS_HELPER="${OPENVPN_LISTS_HELPER:-/root/antizapret/firewall6-lists.py}"
 
 askClientName(){
 	if ! [[ "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]{1,32}$ ]]; then
@@ -58,6 +64,55 @@ askClientCertExpire(){
 			read -rp 'Certificate expiration days: ' -e -i 3650 CLIENT_CERT_EXPIRE
 		done
 	fi
+}
+
+askOpenVPNClientIPv6Prefix(){
+	local current_prefix
+	if [[ ! -f "$OPENVPN_LISTS_HELPER" ]]; then
+		echo "OpenVPN lists helper not found: $OPENVPN_LISTS_HELPER"
+		exit 11
+	fi
+	current_prefix="$(python3 "$OPENVPN_LISTS_HELPER" --get-client-prefix "$CLIENT_NAME")"
+	echo
+	echo 'Enter the global IPv6 prefix routed behind this OpenVPN client.'
+	echo 'Leave empty for a phone, computer, or another endpoint device.'
+	read -rp 'Routed IPv6 prefix (for example 2001:db8:1234::/64): ' -e -i "$current_prefix" CLIENT_IPV6_PREFIX
+	CLIENT_IPV6_PREFIX_SET=y
+}
+
+disconnectOpenVPNClient(){
+	local socket
+	for socket in \
+		/run/openvpn-server/antizapret-udp.sock \
+		/run/openvpn-server/antizapret-tcp.sock \
+		/run/openvpn-server/vpn-udp.sock \
+		/run/openvpn-server/vpn-tcp.sock
+	do
+		[[ -S "$socket" ]] || continue
+		printf 'kill %s\n' "$CLIENT_NAME" | socat - UNIX-CONNECT:"$socket" &>/dev/null || true
+	done
+}
+
+configureOpenVPNClientIPv6(){
+	[[ "$CLIENT_IPV6_PREFIX_SET" == 'y' ]] || return
+	if [[ ! -f "$OPENVPN_LISTS_HELPER" ]]; then
+		echo "OpenVPN lists helper not found: $OPENVPN_LISTS_HELPER"
+		exit 11
+	fi
+	case "$CLIENT_IPV6_PREFIX" in
+		''|'-'|'none')
+			python3 "$OPENVPN_LISTS_HELPER" --clear-client-prefix "$CLIENT_NAME"
+			echo "OpenVPN client '$CLIENT_NAME' configured as an endpoint device"
+			;;
+		*)
+			python3 "$OPENVPN_LISTS_HELPER" --set-client-prefix "$CLIENT_NAME" "$CLIENT_IPV6_PREFIX"
+			echo "OpenVPN client '$CLIENT_NAME' configured as a router for $CLIENT_IPV6_PREFIX"
+			if [[ "${OPENVPN_DCO:-n}" != 'y' ]]; then
+				echo 'Warning: routed IPv6 prefixes require OpenVPN DCO for automatic kernel routes'
+			fi
+			;;
+	esac
+	disconnectOpenVPNClient
 }
 
 setServerHost_FileName(){
@@ -218,6 +273,8 @@ addOpenVPN(){
 		exit 4
 	fi
 
+	configureOpenVPNClientIPv6
+
 	render "/etc/openvpn/client/templates/antizapret-udp.conf" > "/root/antizapret/client/openvpn/antizapret-udp/antizapret-$FILE_NAME-udp.ovpn"
 	render "/etc/openvpn/client/templates/antizapret-tcp.conf" > "/root/antizapret/client/openvpn/antizapret-tcp/antizapret-$FILE_NAME-tcp.ovpn"
 	render "/etc/openvpn/client/templates/antizapret.conf" > "/root/antizapret/client/openvpn/antizapret/antizapret-$FILE_NAME.ovpn"
@@ -242,11 +299,13 @@ deleteOpenVPN(){
 	rm -f /root/antizapret/client/openvpn/vpn/vpn-"$FILE_NAME".ovpn
 	rm -f /root/antizapret/client/openvpn/vpn-udp/vpn-"$FILE_NAME"-udp.ovpn
 	rm -f /root/antizapret/client/openvpn/vpn-tcp/vpn-"$FILE_NAME"-tcp.ovpn
+	if [[ -f "$OPENVPN_LISTS_HELPER" ]]; then
+		python3 "$OPENVPN_LISTS_HELPER" --delete-client-config "$CLIENT_NAME"
+	else
+		rm -f "/etc/openvpn/server/ccd/$CLIENT_NAME" "/etc/openvpn/server/ccd2/$CLIENT_NAME"
+	fi
 
-	echo "kill $CLIENT_NAME" | socat - UNIX-CONNECT:/run/openvpn-server/antizapret-udp.sock &>/dev/null || true
-	echo "kill $CLIENT_NAME" | socat - UNIX-CONNECT:/run/openvpn-server/antizapret-tcp.sock &>/dev/null || true
-	echo "kill $CLIENT_NAME" | socat - UNIX-CONNECT:/run/openvpn-server/vpn-udp.sock &>/dev/null || true
-	echo "kill $CLIENT_NAME" | socat - UNIX-CONNECT:/run/openvpn-server/vpn-tcp.sock &>/dev/null || true
+	disconnectOpenVPNClient
 
 	echo "OpenVPN client '$CLIENT_NAME' successfully deleted"
 }
@@ -451,8 +510,12 @@ backup(){
 	mkdir -p /root/antizapret/backup/config
 	mkdir -p /root/antizapret/backup/knot-resolver
 	mkdir -p /root/antizapret/backup/custom
+	mkdir -p /root/antizapret/backup/openvpn-ccd/ccd
+	mkdir -p /root/antizapret/backup/openvpn-ccd/ccd2
 
 	cp -r /etc/openvpn/easyrsa3 /root/antizapret/backup
+	find /etc/openvpn/server/ccd -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t /root/antizapret/backup/openvpn-ccd/ccd -- {} +
+	find /etc/openvpn/server/ccd2 -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t /root/antizapret/backup/openvpn-ccd/ccd2 -- {} +
 	cp -r /etc/wireguard/antizapret.conf /root/antizapret/backup/wireguard
 	cp -r /etc/wireguard/vpn.conf /root/antizapret/backup/wireguard
 	cp -r /etc/wireguard/key /root/antizapret/backup/wireguard
@@ -461,7 +524,7 @@ backup(){
 	cp -r /root/antizapret/custom*.sh /root/antizapret/backup/custom || true
 
 	BACKUP_FILE="/root/antizapret/backup-$SERVER_IP.tar.gz"
-	tar -czf $BACKUP_FILE -C /root/antizapret/backup easyrsa3 wireguard config knot-resolver custom
+	tar -czf $BACKUP_FILE -C /root/antizapret/backup easyrsa3 openvpn-ccd wireguard config knot-resolver custom
 	tar -tzf $BACKUP_FILE >/dev/null
 
 	rm -rf /root/antizapret/backup
@@ -478,13 +541,14 @@ restore(){
 		rm -rf /root/config
 		rm -rf /root/knot-resolver
 		rm -rf /root/custom
+		rm -rf /root/openvpn-ccd
 	fi
 
 	tar -xzf /root/backup*.tar.gz -C /root || true
 	rm -f /root/backup*.tar.gz || true
 
-	if [[ ! -d /root/easyrsa3 && ! -d /root/wireguard && ! -d /root/config && ! -d /root/knot-resolver && ! -d /root/custom ]]; then
-		echo 'Backup not found! Upload backup*.tar.gz to /root, or extract folders to /root: easyrsa3, wireguard, config, knot-resolver, custom'
+	if [[ ! -d /root/easyrsa3 && ! -d /root/openvpn-ccd && ! -d /root/wireguard && ! -d /root/config && ! -d /root/knot-resolver && ! -d /root/custom ]]; then
+		echo 'Backup not found! Upload backup*.tar.gz to /root, or extract folders to /root: easyrsa3, openvpn-ccd, wireguard, config, knot-resolver, custom'
 		exit 8
 	fi
 
@@ -493,6 +557,9 @@ restore(){
 	fi
 
 	cp -r /root/easyrsa3/* /etc/openvpn/easyrsa3/ || true
+	mkdir -p /etc/openvpn/server/ccd /etc/openvpn/server/ccd2
+	cp -a /root/openvpn-ccd/ccd/* /etc/openvpn/server/ccd/ || true
+	cp -a /root/openvpn-ccd/ccd2/* /etc/openvpn/server/ccd2/ || true
 	cp /root/wireguard/* /etc/wireguard/ || true
 	cp /root/config/* /root/antizapret/config/ || true
 	cp /root/knot-resolver/* /etc/knot-resolver/ || true
@@ -503,6 +570,7 @@ restore(){
 	rm -rf /root/config
 	rm -rf /root/knot-resolver
 	rm -rf /root/custom
+	rm -rf /root/openvpn-ccd
 
 	./doall.sh ip
 	initWireGuard
@@ -536,6 +604,9 @@ case "$OPTION" in
 		echo "OpenVPN - Add client/Renew client certificate $CLIENT_NAME $CLIENT_CERT_EXPIRE"
 		askClientName
 		initOpenVPN
+		if [[ "$CLIENT_IPV6_PREFIX_SET" != 'y' && -t 0 ]]; then
+			askOpenVPNClientIPv6Prefix
+		fi
 		addOpenVPN
 		;;
 	2)

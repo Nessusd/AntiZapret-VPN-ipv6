@@ -339,6 +339,17 @@ fi
 rm -rf /var/cache/knot-resolver/*
 rm -rf /var/cache/knot-resolver2/*
 
+# Сохраняем персональные OpenVPN CCD-файлы с маршрутизируемыми IPv6-префиксами.
+OPENVPN_CCD_STAGING=/tmp/antizapret-openvpn-ccd
+rm -rf "$OPENVPN_CCD_STAGING"
+mkdir -p "$OPENVPN_CCD_STAGING/ccd" "$OPENVPN_CCD_STAGING/ccd2"
+if [[ -d /etc/openvpn/server/ccd ]]; then
+	find /etc/openvpn/server/ccd -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t "$OPENVPN_CCD_STAGING/ccd" -- {} +
+fi
+if [[ -d /etc/openvpn/server/ccd2 ]]; then
+	find /etc/openvpn/server/ccd2 -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t "$OPENVPN_CCD_STAGING/ccd2" -- {} +
+fi
+
 # Удаляем старые файлы OpenVPN и WireGuard
 rm -rf /etc/openvpn/server/*
 rm -rf /etc/openvpn/client/*
@@ -450,12 +461,18 @@ if [[ -e /root/backup*.tar.gz ]]; then
 	rm -rf /root/config
 	rm -rf /root/knot-resolver
 	rm -rf /root/custom
+	rm -rf /root/openvpn-ccd
 fi
 
 tar -xzf /root/backup*.tar.gz || true
 rm -f /root/backup*.tar.gz || true
 
 cp -r /root/easyrsa3/* /tmp/antizapret/setup/etc/openvpn/easyrsa3/ || true
+mkdir -p /tmp/antizapret/setup/etc/openvpn/server/ccd /tmp/antizapret/setup/etc/openvpn/server/ccd2
+cp -a "$OPENVPN_CCD_STAGING/ccd/"* /tmp/antizapret/setup/etc/openvpn/server/ccd/ || true
+cp -a "$OPENVPN_CCD_STAGING/ccd2/"* /tmp/antizapret/setup/etc/openvpn/server/ccd2/ || true
+cp -a /root/openvpn-ccd/ccd/* /tmp/antizapret/setup/etc/openvpn/server/ccd/ || true
+cp -a /root/openvpn-ccd/ccd2/* /tmp/antizapret/setup/etc/openvpn/server/ccd2/ || true
 cp /root/wireguard/* /tmp/antizapret/setup/etc/wireguard/ || true
 cp /root/config/* /tmp/antizapret/setup/root/antizapret/config/ || true
 cp /root/knot-resolver/* /tmp/antizapret/setup/etc/knot-resolver/ || true
@@ -466,6 +483,8 @@ rm -rf /root/wireguard
 rm -rf /root/config
 rm -rf /root/knot-resolver
 rm -rf /root/custom
+rm -rf /root/openvpn-ccd
+rm -rf "$OPENVPN_CCD_STAGING"
 
 # Сохраняем настройки
 echo "SETUP_DATE=$(date --iso-8601=seconds)
