@@ -207,6 +207,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 
 	if [[ "$AKAMAI_INCLUDE" == 'y' ]]; then
 		download $AKAMAI_IPS_PATH $AKAMAI_IPS_LINK
+		download_ipv6_list akamai
 	fi
 
 	if [[ "$WHATSAPP_INCLUDE" == 'y' ]]; then
