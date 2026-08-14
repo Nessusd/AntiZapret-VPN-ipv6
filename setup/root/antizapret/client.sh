@@ -129,7 +129,7 @@ disconnectOpenVPNClient(){
 }
 
 configureOpenVPNClientIPv6(){
-	[[ "$CLIENT_IPV6_PREFIX_SET" == 'y' ]] || return
+	[[ "$CLIENT_IPV6_PREFIX_SET" == 'y' ]] || return 0
 	if [[ ! -f "$OPENVPN_LISTS_HELPER" ]]; then
 		echo "OpenVPN lists helper not found: $OPENVPN_LISTS_HELPER"
 		exit 11
@@ -151,7 +151,7 @@ configureOpenVPNClientIPv6(){
 }
 
 configureOpenVPNClientRouteMode(){
-	[[ "$CLIENT_ROUTE_MODE_SET" == 'y' ]] || return
+	[[ "$CLIENT_ROUTE_MODE_SET" == 'y' ]] || return 0
 	validateClientRouteMode
 	if [[ ! -f "$OPENVPN_LISTS_HELPER" ]]; then
 		echo "OpenVPN lists helper not found: $OPENVPN_LISTS_HELPER"
