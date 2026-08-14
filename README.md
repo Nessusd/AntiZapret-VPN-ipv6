@@ -130,7 +130,8 @@ IPv4-адрес:
 
 В командах ниже нужно изменить:
 
-- `10.29.0.2` — адрес самого роутера в VPN;
+- `10.29.0.2` — адрес самого роутера в VPN; он же используется как
+  его уникальный `router-id`;
 - `10.29.0.1` — адрес сервера: `10.29.0.1` для OpenVPN UDP,
   `10.29.4.1` для OpenVPN TCP и `10.29.8.1` для WireGuard; при
   альтернативном диапазоне `10` заменяется на `172`;
@@ -138,6 +139,9 @@ IPv4-адрес:
   выбирались другие;
 - `main` — таблица, куда будут помещены маршруты. Для policy routing её можно
   заменить на заранее созданную таблицу.
+
+Все клиенты могут использовать один ASN `4200000291`: сервер различает их по
+уникальным адресам в туннеле. `router-id` у них также должен различаться.
 
 Общие для всех RouterOS 7 фильтры принимают только анонсы AntiZapret нужного
 стека. Обратный экспорт полностью запрещён:
@@ -154,14 +158,14 @@ add chain=antizapret-bgp-out rule="reject;"
 
 ```routeros
 /routing/bgp/connection
-add name=antizapret-bgp as=4200000291 local.address=10.29.0.2 local.role=ebgp remote.address=10.29.0.1/32 remote.as=4200000290 afi=ip,ipv6 routing-table=main connect=yes listen=no input.filter=antizapret-bgp-in input.limit-process-routes-ipv4=10000 input.limit-process-routes-ipv6=10000 output.filter-chain=antizapret-bgp-out
+add name=antizapret-bgp as=4200000291 router-id=10.29.0.2 local.address=10.29.0.2 local.role=ebgp remote.address=10.29.0.1/32 remote.as=4200000290 afi=ip,ipv6 routing-table=main connect=yes listen=no input.filter=antizapret-bgp-in input.limit-process-routes-ipv4=10000 input.limit-process-routes-ipv6=10000 output.filter-chain=antizapret-bgp-out
 ```
 
 На RouterOS 7.20 и новее сначала нужно создать отдельный BGP instance:
 
 ```routeros
 /routing/bgp/instance
-add name=antizapret-bgp as=4200000291
+add name=antizapret-bgp as=4200000291 router-id=10.29.0.2
 
 /routing/bgp/connection
 add name=antizapret-bgp instance=antizapret-bgp local.address=10.29.0.2 local.role=ebgp remote.address=10.29.0.1/32 remote.as=4200000290 afi=ip,ipv6 routing-table=main connect=yes listen=no input.filter=antizapret-bgp-in input.limit-process-routes-ipv4=10000 input.limit-process-routes-ipv6=10000 output.filter-chain=antizapret-bgp-out
