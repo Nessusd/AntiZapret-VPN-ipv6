@@ -1,0 +1,13 @@
+/etc/openvpn/server/logs/antizapret-udp.log /etc/openvpn/server/logs/antizapret-tcp.log /etc/openvpn/server/logs/vpn-udp.log /etc/openvpn/server/logs/vpn-tcp.log {
+	size 8M
+	rotate 12
+	maxage 14
+	missingok
+	notifempty
+	compress
+	delaycompress
+	copytruncate
+	su root root
+	dateext
+	dateformat -%Y%m%d-%H%M%S
+}

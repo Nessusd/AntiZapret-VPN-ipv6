@@ -204,6 +204,19 @@ add name=antizapret-bgp instance=antizapret-bgp local.address=10.29.0.2 local.ro
 /root/antizapret/doall.sh
 ```
 
+Отчёты обновления и BGP пишутся в системный журнал:
+
+```sh
+journalctl -u antizapret-update.service -u antizapret-bgp.service
+```
+
+Журнал ограничен 256 МБ и хранится не дольше 14 дней. Если при установке
+включены подробные логи OpenVPN, они проверяются на ротацию каждый час:
+файл ротируется после 8 МБ, хранится до 12 архивов и не старше 14 дней.
+При включённых OpenVPN TCP и защите от атак TLS-сканеры, отправляющие HTTPS
+ClientHello, блокируются на 24 часа. Правила создаются только для TCP-портов,
+указанных в серверной конфигурации OpenVPN.
+
 Свои домены добавляются в `/root/antizapret/config/include-hosts.txt`, а сети
 IPv4 и IPv6 — в `/root/antizapret/config/include-ips.txt`. Для исключений рядом
 лежат `exclude-hosts.txt` и `exclude-ips.txt`. После изменения этих файлов нужно

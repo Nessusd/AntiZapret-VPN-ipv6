@@ -493,7 +493,7 @@ elif [[ "$OS" == 'debian' ]] && (( VERSION < 14 )); then
 fi
 BGP_PACKAGE=
 [[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
-apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate
 if [[ "$BGP_ENABLE" == 'y' && "$BIRD_WAS_INSTALLED" == 'n' ]]; then
 	# The distribution unit is not used; AntiZapret has an isolated instance.
 	systemctl disable --now bird.service || true
@@ -754,6 +754,7 @@ systemctl enable kresd@2
 systemctl enable antizapret
 systemctl enable antizapret-update.timer
 systemctl enable antizapret-update
+systemctl enable logrotate.timer
 if [[ "$OPENVPN_UDP_ENABLE" == 'y' ]]; then
 	systemctl enable openvpn-server@antizapret-udp
 	systemctl enable openvpn-server@vpn-udp

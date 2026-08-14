@@ -8,6 +8,33 @@ cd /root/antizapret
 
 source setup
 
+load_openvpn_tcp_ports() {
+	local config proto port server_dir
+	server_dir="${OPENVPN_SERVER_DIR:-/etc/openvpn/server}"
+	OPENVPN_TCP_PORTS=
+	for config in \
+		"$server_dir/antizapret-tcp.conf" \
+		"$server_dir/vpn-tcp.conf"; do
+		[[ -f "$config" ]] || continue
+		proto="$(awk '$1 == "proto" { print tolower($2); exit }' "$config")"
+		[[ "$proto" == tcp* ]] || continue
+		port="$(awk '$1 == "port" { print $2; exit }' "$config")"
+		if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+			echo "Invalid OpenVPN TCP port in $config: ${port:-missing}" >&2
+			return 1
+		fi
+		port=$((10#$port))
+		case ",$OPENVPN_TCP_PORTS," in
+			*",$port,"*) ;;
+			*) OPENVPN_TCP_PORTS="${OPENVPN_TCP_PORTS:+$OPENVPN_TCP_PORTS,}$port" ;;
+		esac
+	done
+	if [[ -z "$OPENVPN_TCP_PORTS" ]]; then
+		echo 'No enabled OpenVPN TCP server ports found!' >&2
+		return 1
+	fi
+}
+
 if [[ -z "$DEFAULT_INTERFACE" ]]; then
 	DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+')"
 	if [[ -z "$DEFAULT_INTERFACE" ]]; then
@@ -214,10 +241,26 @@ if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 	ipset create antizapret-block hash:ip timeout 600 -exist
 	ipset create antizapret-watch hash:ip,port timeout 600 -exist
 	iptables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow src -j ACCEPT
-	iptables -w -I INPUT 3 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
-	iptables -w -I INPUT 4 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
-	iptables -w -I INPUT 5 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block src -j DROP
-	iptables -w -I INPUT 6 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch src,dst --exist
+	ATTACK_INPUT_RULE=3
+	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' ]]; then
+		load_openvpn_tcp_ports
+		ipset create antizapret-openvpn-scanner hash:ip timeout 86400 -exist
+		# Обычный OpenVPN TCP-кадр начинается с двухбайтовой длины пакета. Значение
+		# 0x1603 вместо неё отправляют HTTPS/TLS-сканеры в начале TLS ClientHello.
+		iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP_PORTS" -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -m comment --comment antizapret-openvpn-scanner-detect -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 86400
+		ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
+		iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP_PORTS" -m set --match-set antizapret-openvpn-scanner src -m comment --comment antizapret-openvpn-scanner-drop -j DROP
+		ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
+	else
+		ipset destroy antizapret-openvpn-scanner 2>/dev/null || true
+	fi
+	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
+	ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
+	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
+	ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
+	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block src -j DROP
+	ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
+	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch src,dst --exist
 	ipset create antizapret-allow6 hash:net family inet6 -exist
 	ipset create antizapret-block6 hash:ip timeout 600 family inet6 -exist
 	ipset create antizapret-watch6 hash:ip,port timeout 600 family inet6 -exist
@@ -343,6 +386,12 @@ done
 if [[ "$(iptables -w -t nat -S ANTIZAPRET-MAPPING | wc -l)" -eq 1 ]]; then
 	count="$(echo 'cache.clear()' | socat - /run/knot-resolver/control/1 | grep -oE '[0-9]+' || echo 0)"
 	echo "AntiZapret DNS cache cleared: $count entries"
+fi
+
+# При повторном запуске основной службы вернём узкое BGP-правило перед
+# правилами изоляции клиентов. При первой загрузке его установит BGP-служба.
+if [[ "${BGP_ENABLE:-n}" == 'y' ]] && systemctl is-active --quiet antizapret-bgp.service; then
+	./bgp-firewall.sh up
 fi
 
 ./custom-up.sh

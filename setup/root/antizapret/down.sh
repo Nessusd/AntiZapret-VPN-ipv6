@@ -76,6 +76,18 @@ iptables -w -D INPUT -p tcp --dport ssh -m conntrack --ctstate NEW -m hashlimit 
 ip6tables -w -D INPUT -p tcp --dport ssh -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 5/hour --hashlimit-burst 5 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-ssh6 --hashlimit-htable-expire 60000 -j DROP
 # Attack protection
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow src -j ACCEPT
+# Новые правила помечены, поэтому удаляются независимо от текущих портов в
+# OpenVPN-конфигурации. Следующие команды очищают старые варианты правил.
+while OPENVPN_SCANNER_RULE_NUMBER="$(iptables -w -L INPUT --line-numbers -n | awk '/antizapret-openvpn-scanner/ { print $1; exit }')" && [[ -n "$OPENVPN_SCANNER_RULE_NUMBER" ]]; do
+	iptables -w -D INPUT "$OPENVPN_SCANNER_RULE_NUMBER"
+done
+iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 86400
+iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 3600
+iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist
+iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m set --match-set antizapret-openvpn-scanner src -j DROP
+if [[ "${ATTACK_PROTECTION:-n}" != 'y' || "${OPENVPN_TCP_ENABLE:-n}" != 'y' ]]; then
+	ipset destroy antizapret-openvpn-scanner
+fi
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block src -j DROP
