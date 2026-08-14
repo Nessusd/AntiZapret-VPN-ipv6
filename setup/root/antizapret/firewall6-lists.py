@@ -25,6 +25,7 @@ OPENVPN_END = "# END ANTIZAPRET MANAGED IPV6 ROUTES"
 OPENVPN_CLIENT_DEFAULT_BEGIN = "# BEGIN ANTIZAPRET MANAGED DEFAULT ROUTES"
 OPENVPN_CLIENT_DEFAULT_END = "# END ANTIZAPRET MANAGED DEFAULT ROUTES"
 OPENVPN_CLIENT_PREFIX_TAG = "# ANTIZAPRET ROUTED IPV6 PREFIX: "
+OPENVPN_CLIENT_ROUTE_MODE_TAG = "# ANTIZAPRET ROUTE MODE: "
 OPENVPN_CLIENT_PREFIX_BEGIN = "# BEGIN ANTIZAPRET MANAGED CLIENT IPV6"
 OPENVPN_CLIENT_PREFIX_END = "# END ANTIZAPRET MANAGED CLIENT IPV6"
 DEFAULT_IPV6_PREFIX = "fd3a:c9bc:6bcb::/48"
@@ -198,6 +199,8 @@ def strip_managed_sections(text: str) -> list[str]:
             continue
         if line.startswith(OPENVPN_CLIENT_PREFIX_TAG):
             continue
+        if line.startswith(OPENVPN_CLIENT_ROUTE_MODE_TAG):
+            continue
         retained.append(line)
     if expected_end is not None:
         raise RuntimeError(f"unterminated managed OpenVPN block ending with {expected_end}")
@@ -240,6 +243,29 @@ def read_client_prefix(name: str) -> ipaddress.IPv6Network | None:
     return next(iter(prefixes), None)
 
 
+def route_mode_from_text(text: str, source: Path) -> str:
+    values = [
+        line.removeprefix(OPENVPN_CLIENT_ROUTE_MODE_TAG).strip()
+        for line in text.splitlines()
+        if line.startswith(OPENVPN_CLIENT_ROUTE_MODE_TAG)
+    ]
+    if not values:
+        return "static"
+    if len(values) != 1 or values[0] != "bgp":
+        raise RuntimeError(f"invalid AntiZapret route mode in {source}")
+    return values[0]
+
+
+def read_client_route_mode(name: str) -> str:
+    path = client_path(OPENVPN_CCD, name)
+    try:
+        return route_mode_from_text(path.read_text(encoding="utf-8"), path)
+    except FileNotFoundError:
+        return "static"
+    except OSError as exc:
+        raise RuntimeError(f"cannot read {path}: {exc}") from exc
+
+
 def managed_client_names() -> set[str]:
     names: set[str] = set()
     for directory in (OPENVPN_CCD, OPENVPN_CCD2):
@@ -256,7 +282,10 @@ def managed_client_names() -> set[str]:
                 text = path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise RuntimeError(f"cannot read {path}: {exc}") from exc
-            if OPENVPN_CLIENT_PREFIX_TAG in text:
+            if (
+                OPENVPN_CLIENT_PREFIX_TAG in text
+                or OPENVPN_CLIENT_ROUTE_MODE_TAG in text
+            ):
                 names.add(validate_client_name(path.name))
     return names
 
@@ -284,10 +313,11 @@ def read_openvpn_default() -> str:
 
 def render_client_config(
     path: Path,
-    prefix: ipaddress.IPv6Network,
+    prefix: ipaddress.IPv6Network | None,
     *,
     default_routes: str | None,
     ipv6_enabled: bool,
+    route_mode: str,
 ) -> str:
     try:
         original = path.read_text(encoding="utf-8")
@@ -299,31 +329,43 @@ def render_client_config(
     unmanaged_iroutes = [
         line for line in retained if line.strip().startswith("iroute-ipv6 ")
     ]
-    if unmanaged_iroutes:
+    if unmanaged_iroutes and prefix is not None:
         raise RuntimeError(
             f"{path} contains an unmanaged iroute-ipv6; remove it before "
             "assigning a managed routed prefix"
         )
     if default_routes is not None:
-        retained.append(OPENVPN_CLIENT_DEFAULT_BEGIN)
-        retained.extend(default_routes.rstrip("\n").splitlines())
-        retained.append(OPENVPN_CLIENT_DEFAULT_END)
-    retained.append(f"{OPENVPN_CLIENT_PREFIX_TAG}{prefix.with_prefixlen}")
-    if ipv6_enabled:
-        retained.extend(
-            [
-                OPENVPN_CLIENT_PREFIX_BEGIN,
-                f"iroute-ipv6 {prefix.with_prefixlen}",
-                OPENVPN_CLIENT_PREFIX_END,
-            ]
-        )
+        if route_mode == "bgp":
+            retained.append(f"{OPENVPN_CLIENT_ROUTE_MODE_TAG}bgp")
+        elif prefix is not None or retained:
+            retained.append(OPENVPN_CLIENT_DEFAULT_BEGIN)
+            retained.extend(default_routes.rstrip("\n").splitlines())
+            retained.append(OPENVPN_CLIENT_DEFAULT_END)
+    if prefix is not None:
+        retained.append(f"{OPENVPN_CLIENT_PREFIX_TAG}{prefix.with_prefixlen}")
+        if ipv6_enabled:
+            retained.extend(
+                [
+                    OPENVPN_CLIENT_PREFIX_BEGIN,
+                    f"iroute-ipv6 {prefix.with_prefixlen}",
+                    OPENVPN_CLIENT_PREFIX_END,
+                ]
+            )
+    if not retained:
+        return ""
     retained.append("")
     return "\n".join(retained)
 
 
 def write_client_config(
-    name: str, prefix: ipaddress.IPv6Network, *, ipv6_enabled: bool
+    name: str,
+    prefix: ipaddress.IPv6Network | None,
+    *,
+    ipv6_enabled: bool,
+    route_mode: str,
 ) -> None:
+    if route_mode not in {"static", "bgp"}:
+        raise RuntimeError(f"unsupported OpenVPN route mode {route_mode!r}")
     default_routes = read_openvpn_default()
     destinations = (
         (client_path(OPENVPN_CCD, name), default_routes),
@@ -337,26 +379,46 @@ def write_client_config(
                 prefix,
                 default_routes=routes,
                 ipv6_enabled=ipv6_enabled,
+                route_mode=route_mode,
             ),
         )
         for path, routes in destinations
     ]
     for path, content in rendered:
-        replace_text(path, content)
+        if content:
+            replace_text(path, content)
+        else:
+            path.unlink(missing_ok=True)
 
 
 def set_client_prefix(name: str, value: str) -> None:
     name = validate_client_name(name)
     prefix = parse_client_prefix(value)
     validate_unique_client_prefix(name, prefix)
+    route_mode = read_client_route_mode(name)
+    if os.environ.get("BGP_ENABLE", "n") != "y":
+        route_mode = "static"
     write_client_config(
         name,
         prefix,
         ipv6_enabled=os.environ.get("DISABLE_IPV6", "n") != "y",
+        route_mode=route_mode,
     )
 
 
 def clear_client_prefix(name: str, *, delete: bool = False) -> None:
+    name = validate_client_name(name)
+    if not delete:
+        route_mode = read_client_route_mode(name)
+        if os.environ.get("BGP_ENABLE", "n") != "y":
+            route_mode = "static"
+        write_client_config(
+            name,
+            None,
+            ipv6_enabled=os.environ.get("DISABLE_IPV6", "n") != "y",
+            route_mode=route_mode,
+        )
+        return
     for directory in (OPENVPN_CCD, OPENVPN_CCD2):
         path = client_path(directory, name)
         try:
@@ -365,31 +427,39 @@ def clear_client_prefix(name: str, *, delete: bool = False) -> None:
             continue
         except OSError as exc:
             raise RuntimeError(f"cannot read {path}: {exc}") from exc
-        if delete:
-            path.unlink()
-            continue
-        retained = strip_managed_sections(original)
-        if any(line.strip().startswith("iroute-ipv6 ") for line in retained):
-            raise RuntimeError(
-                f"{path} contains an unmanaged iroute-ipv6; remove it manually"
-            )
-        if retained:
-            replace_text(path, "\n".join(retained) + "\n")
-        else:
-            path.unlink()
+        path.unlink()
 
 
-def sync_client_configs(*, ipv6_enabled: bool) -> None:
+def set_client_route_mode(name: str, mode: str) -> None:
+    name = validate_client_name(name)
+    if mode not in {"static", "bgp"}:
+        raise RuntimeError("OpenVPN route mode must be static or bgp")
+    if mode == "bgp" and os.environ.get("BGP_ENABLE", "n") != "y":
+        raise RuntimeError("BGP is disabled in the AntiZapret setup")
+    write_client_config(
+        name,
+        read_client_prefix(name),
+        ipv6_enabled=os.environ.get("DISABLE_IPV6", "n") != "y",
+        route_mode=mode,
+    )
+
+
+def sync_client_configs(*, ipv6_enabled: bool, bgp_enabled: bool = False) -> None:
     names = managed_client_names()
-    prefixes: dict[str, ipaddress.IPv6Network] = {}
+    prefixes: dict[str, ipaddress.IPv6Network | None] = {}
     for name in names:
         prefix = read_client_prefix(name)
-        if prefix is None:
-            raise RuntimeError(f"missing routed IPv6 prefix for client {name!r}")
-        validate_unique_client_prefix(name, prefix)
+        if prefix is not None:
+            validate_unique_client_prefix(name, prefix)
         prefixes[name] = prefix
     for name in sorted(prefixes):
-        write_client_config(name, prefixes[name], ipv6_enabled=ipv6_enabled)
+        route_mode = read_client_route_mode(name) if bgp_enabled else "static"
+        write_client_config(
+            name,
+            prefixes[name],
+            ipv6_enabled=ipv6_enabled,
+            route_mode=route_mode,
+        )
 
 
 def downloaded_networks(refresh_download: bool) -> set[ipaddress.IPv6Network]:
@@ -427,6 +497,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         metavar="CLIENT",
         help="delete CCD files for a revoked OpenVPN client",
     )
+    actions.add_argument(
+        "--get-client-route-mode",
+        metavar="CLIENT",
+        help="print static or bgp for an OpenVPN client",
+    )
+    actions.add_argument(
+        "--set-client-route-mode",
+        nargs=2,
+        metavar=("CLIENT", "MODE"),
+        help="select static or bgp route delivery for an OpenVPN client",
+    )
     return parser.parse_args(argv)
 
 
@@ -436,6 +517,12 @@ def main(argv: list[str]) -> int:
         prefix = read_client_prefix(args.get_client_prefix)
         if prefix is not None:
             print(prefix.with_prefixlen)
+        return 0
+    if args.get_client_route_mode:
+        print(read_client_route_mode(args.get_client_route_mode))
+        return 0
+    if args.set_client_route_mode:
+        set_client_route_mode(*args.set_client_route_mode)
         return 0
     if args.set_client_prefix:
         set_client_prefix(*args.set_client_prefix)
@@ -447,9 +534,10 @@ def main(argv: list[str]) -> int:
         clear_client_prefix(args.delete_client_config, delete=True)
         return 0
     ipv6_enabled = os.environ.get("DISABLE_IPV6", "n") != "y"
+    bgp_enabled = os.environ.get("BGP_ENABLE", "n") == "y"
     if args.disable_openvpn or not ipv6_enabled:
         write_openvpn_routes(OPENVPN_DEFAULT, set(), enabled=False)
-        sync_client_configs(ipv6_enabled=False)
+        sync_client_configs(ipv6_enabled=False, bgp_enabled=bgp_enabled)
         return 0
 
     refresh_download = args.refresh_download
@@ -461,7 +549,7 @@ def main(argv: list[str]) -> int:
 
     write_result("route-ips6.txt", route)
     write_openvpn_routes(OPENVPN_DEFAULT, route, fake_network=fake_network)
-    sync_client_configs(ipv6_enabled=True)
+    sync_client_configs(ipv6_enabled=True, bgp_enabled=bgp_enabled)
     write_result("allow-ips6.txt", read_networks(["config/*allow-ips.txt"]))
     write_result("deny-ips6.txt", read_networks(["config/*deny-ips.txt"]))
     write_result("drop-ips6.txt", read_networks(["config/*drop-ips.txt"]))

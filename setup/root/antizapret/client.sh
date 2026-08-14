@@ -2,7 +2,7 @@
 #
 # Добавление/удаление клиента
 #
-# chmod +x client.sh && ./client.sh [1-9] [имя_клиента] [срок_действия_сертификата] [маршрутизируемый_IPv6-префикс]
+# chmod +x client.sh && ./client.sh [1-9] [имя_клиента] [срок_действия_сертификата] [маршрутизируемый_IPv6-префикс] [static|bgp]
 #
 # Срок действия сертификата в днях - только для OpenVPN
 #
@@ -18,8 +18,8 @@ handle_error() {
 trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
 ARGUMENT_COUNT=$#
-if (( ARGUMENT_COUNT > 4 )); then
-	echo 'Too many parameters! Usage: ./client.sh [1-9] [client_name] [cert_expire_days] [routed_ipv6_prefix]'
+if (( ARGUMENT_COUNT > 5 )); then
+	echo 'Too many parameters! Usage: ./client.sh [1-9] [client_name] [cert_expire_days] [routed_ipv6_prefix] [static|bgp]'
 	exit 2
 fi
 
@@ -32,14 +32,23 @@ fi
 export EASYRSA_PKI=/etc/openvpn/easyrsa3/pki
 cd /root/antizapret
 source setup
-export DISABLE_IPV6
+export DISABLE_IPV6 BGP_ENABLE
 umask 022
 OPTION="$1"
 CLIENT_NAME="$2"
 CLIENT_CERT_EXPIRE="$3"
 CLIENT_IPV6_PREFIX="${4-}"
 CLIENT_IPV6_PREFIX_SET=n
-(( ARGUMENT_COUNT == 4 )) && CLIENT_IPV6_PREFIX_SET=y
+(( ARGUMENT_COUNT >= 4 )) && CLIENT_IPV6_PREFIX_SET=y
+CLIENT_ROUTE_MODE="${5-}"
+CLIENT_ROUTE_MODE_SET=n
+(( ARGUMENT_COUNT == 5 )) && CLIENT_ROUTE_MODE_SET=y
+if [[ "$OPTION" == '4' && "$ARGUMENT_COUNT" == '4' && "$CLIENT_IPV6_PREFIX" =~ ^(static|bgp)$ ]]; then
+	CLIENT_ROUTE_MODE=$CLIENT_IPV6_PREFIX
+	CLIENT_ROUTE_MODE_SET=y
+	CLIENT_IPV6_PREFIX=
+	CLIENT_IPV6_PREFIX_SET=n
+fi
 VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX:-${WIREGUARD_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}"
 WIREGUARD_IPV6_PREFIX="$VPN_IPV6_PREFIX"
 WIREGUARD_IPV6_HELPER="${WIREGUARD_IPV6_HELPER:-/root/antizapret/wireguard-ipv6.py}"
@@ -80,6 +89,32 @@ askOpenVPNClientIPv6Prefix(){
 	CLIENT_IPV6_PREFIX_SET=y
 }
 
+validateClientRouteMode(){
+	if [[ "$CLIENT_ROUTE_MODE" != 'static' && "$CLIENT_ROUTE_MODE" != 'bgp' ]]; then
+		echo "Invalid route mode '$CLIENT_ROUTE_MODE'; use static or bgp"
+		exit 12
+	fi
+	if [[ "$CLIENT_ROUTE_MODE" == 'bgp' && "${BGP_ENABLE:-n}" != 'y' ]]; then
+		echo 'BGP route delivery is disabled in the AntiZapret setup'
+		exit 12
+	fi
+}
+
+askClientRouteMode(){
+	local current_mode=${1:-static}
+	if [[ "${BGP_ENABLE:-n}" != 'y' ]]; then
+		CLIENT_ROUTE_MODE=static
+		CLIENT_ROUTE_MODE_SET=y
+		return
+	fi
+	echo
+	echo 'Choose how this router receives AntiZapret routes: static or bgp.'
+	echo 'Use static for endpoint devices and existing client configurations.'
+	read -rp 'Route mode [static/bgp]: ' -e -i "$current_mode" CLIENT_ROUTE_MODE
+	validateClientRouteMode
+	CLIENT_ROUTE_MODE_SET=y
+}
+
 disconnectOpenVPNClient(){
 	local socket
 	for socket in \
@@ -112,6 +147,18 @@ configureOpenVPNClientIPv6(){
 			fi
 			;;
 	esac
+	disconnectOpenVPNClient
+}
+
+configureOpenVPNClientRouteMode(){
+	[[ "$CLIENT_ROUTE_MODE_SET" == 'y' ]] || return
+	validateClientRouteMode
+	if [[ ! -f "$OPENVPN_LISTS_HELPER" ]]; then
+		echo "OpenVPN lists helper not found: $OPENVPN_LISTS_HELPER"
+		exit 11
+	fi
+	python3 "$OPENVPN_LISTS_HELPER" --set-client-route-mode "$CLIENT_NAME" "$CLIENT_ROUTE_MODE"
+	echo "OpenVPN client '$CLIENT_NAME' route mode: $CLIENT_ROUTE_MODE"
 	disconnectOpenVPNClient
 }
 
@@ -162,6 +209,47 @@ prepareWireGuardIPv6(){
 				[[ -n "$route" ]] && WIREGUARD_IPV6_ROUTES+=", $route"
 			done < /root/antizapret/result/route-ips6.txt
 		fi
+	fi
+}
+
+prepareWireGuardRouteMode(){
+	local mode=${1:-static} client_base=10
+	[[ "${ALTERNATIVE_CLIENT_IP:-n}" == 'y' ]] && client_base=172
+	WIREGUARD_TABLE=
+	WIREGUARD_CLIENT_PREFIX=32
+	if [[ "$mode" == 'bgp' ]]; then
+		WIREGUARD_ALLOWED_IPS='0.0.0.0/0'
+		WIREGUARD_CLIENT_PREFIX=24
+		if [[ "${DISABLE_IPV6:-n}" != 'y' ]]; then
+			WIREGUARD_ALLOWED_IPS+=', ::/0'
+			WIREGUARD_CLIENT_IPV6="${WIREGUARD_CLIENT_IPV6%/128}/64"
+		fi
+		WIREGUARD_TABLE=$'\nTable = off'
+	else
+		WIREGUARD_ALLOWED_IPS="$client_base.29.8.0/24${WIREGUARD_IPV6_ROUTES}${IPS}"
+	fi
+}
+
+wireGuardRouteMode(){
+	local block=$1 mode=static
+	if grep -q '^# RouteMode = bgp$' <<< "$block"; then
+		mode=bgp
+	fi
+	if [[ "$CLIENT_ROUTE_MODE_SET" == 'y' ]]; then
+		validateClientRouteMode
+		mode=$CLIENT_ROUTE_MODE
+	fi
+	if [[ "${BGP_ENABLE:-n}" != 'y' ]]; then
+		mode=static
+	fi
+	echo "$mode"
+}
+
+setWireGuardRouteModeMarker(){
+	local config=$1 mode=$2
+	sed -i "/^# Client = ${CLIENT_NAME}$/,/^AllowedIPs =/ {/^[#] RouteMode = /d;}" "$config"
+	if [[ "$mode" == 'bgp' ]]; then
+		sed -i "/^# Client = ${CLIENT_NAME}$/a# RouteMode = bgp" "$config"
 	fi
 }
 
@@ -273,6 +361,7 @@ addOpenVPN(){
 		exit 4
 	fi
 
+	configureOpenVPNClientRouteMode
 	configureOpenVPNClientIPv6
 
 	render "/etc/openvpn/client/templates/antizapret-udp.conf" > "/root/antizapret/client/openvpn/antizapret-udp/antizapret-$FILE_NAME-udp.ovpn"
@@ -344,6 +433,7 @@ addWireGuard(){
 	# AntiZapret
 
 	CLIENT_BLOCK="$(sed -n "/^# Client = ${CLIENT_NAME}$/,/^AllowedIPs/ {p; /^AllowedIPs/q}" /etc/wireguard/antizapret.conf)"
+	WIREGUARD_ROUTE_MODE="$(wireGuardRouteMode "$CLIENT_BLOCK")"
 
 	if [[ -n "$CLIENT_BLOCK" ]]; then
 		CLIENT_PRIVATE_KEY="$(echo "$CLIENT_BLOCK" | grep '# PrivateKey =' | cut -d '=' -f 2- | sed 's/ //g')"
@@ -367,18 +457,23 @@ addWireGuard(){
 			fi
 		done
 		setWireGuardClientIPv6 antizapret "$CLIENT_IP"
-		echo "# Client = ${CLIENT_NAME}
-# PrivateKey = ${CLIENT_PRIVATE_KEY}
+		{
+			echo "# Client = ${CLIENT_NAME}"
+			[[ "$WIREGUARD_ROUTE_MODE" == 'bgp' ]] && echo '# RouteMode = bgp'
+			echo "# PrivateKey = ${CLIENT_PRIVATE_KEY}
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
 PresharedKey = ${CLIENT_PRESHARED_KEY}
 AllowedIPs = ${CLIENT_IP}/32${WIREGUARD_CLIENT_IPV6}
-" >> "/etc/wireguard/antizapret.conf"
+"
+		} >> "/etc/wireguard/antizapret.conf"
 		wg syncconf antizapret <(wg-quick strip antizapret 2>/dev/null) &>/dev/null || true
 	fi
+	setWireGuardRouteModeMarker /etc/wireguard/antizapret.conf "$WIREGUARD_ROUTE_MODE"
 
 	prepareWireGuardIPv6 antizapret
 	setWireGuardClientIPv6 antizapret "$CLIENT_IP"
+	prepareWireGuardRouteMode "$WIREGUARD_ROUTE_MODE"
 	render "/etc/wireguard/templates/antizapret-client-wg.conf" > "/root/antizapret/client/wireguard/antizapret/antizapret-$FILE_NAME-wg.conf"
 	render "/etc/wireguard/templates/antizapret-client-am.conf" > "/root/antizapret/client/amneziawg/antizapret/antizapret-$FILE_NAME-am.conf"
 
@@ -607,6 +702,10 @@ case "$OPTION" in
 		if [[ "$CLIENT_IPV6_PREFIX_SET" != 'y' && -t 0 ]]; then
 			askOpenVPNClientIPv6Prefix
 		fi
+		if [[ "$CLIENT_ROUTE_MODE_SET" != 'y' && -t 0 ]]; then
+			CURRENT_ROUTE_MODE="$(python3 "$OPENVPN_LISTS_HELPER" --get-client-route-mode "$CLIENT_NAME")"
+			askClientRouteMode "$CURRENT_ROUTE_MODE"
+		fi
 		addOpenVPN
 		;;
 	2)
@@ -623,6 +722,11 @@ case "$OPTION" in
 		echo "WireGuard/AmneziaWG - Add client $CLIENT_NAME"
 		askClientName
 		initWireGuard
+		if [[ "$CLIENT_ROUTE_MODE_SET" != 'y' && -t 0 ]]; then
+			CLIENT_BLOCK="$(sed -n "/^# Client = ${CLIENT_NAME}$/,/^AllowedIPs/ {p; /^AllowedIPs/q}" /etc/wireguard/antizapret.conf)"
+			CURRENT_ROUTE_MODE="$(wireGuardRouteMode "$CLIENT_BLOCK")"
+			askClientRouteMode "$CURRENT_ROUTE_MODE"
+		fi
 		addWireGuard
 		;;
 	5)

@@ -20,6 +20,28 @@ fi
 
 cd /root
 
+# Запоминаем только управляемые BGP-настройки предыдущей установки.
+OLD_BGP_ENABLE=n
+OLD_BGP_SERVER_ASN=4200000290
+OLD_BGP_CLIENT_ASN=4200000291
+MANAGED_BGP_PRESENT=n
+if [[ -f /root/antizapret/setup ]]; then
+	OLD_BGP_ENABLE="$(sed -n 's/^BGP_ENABLE=\([yn]\)$/\1/p' /root/antizapret/setup | tail -n 1)"
+	OLD_BGP_SERVER_ASN="$(sed -n 's/^BGP_SERVER_ASN=\([0-9]\+\)$/\1/p' /root/antizapret/setup | tail -n 1)"
+	OLD_BGP_CLIENT_ASN="$(sed -n 's/^BGP_CLIENT_ASN=\([0-9]\+\)$/\1/p' /root/antizapret/setup | tail -n 1)"
+fi
+OLD_BGP_ENABLE="${OLD_BGP_ENABLE:-n}"
+OLD_BGP_SERVER_ASN="${OLD_BGP_SERVER_ASN:-4200000290}"
+OLD_BGP_CLIENT_ASN="${OLD_BGP_CLIENT_ASN:-4200000291}"
+if [[ "$OLD_BGP_ENABLE" == 'y' || -f /etc/systemd/system/antizapret-bgp.service ]]; then
+	MANAGED_BGP_PRESENT=y
+fi
+dpkg-query -W -f='${Status}' bird2 2>/dev/null | grep -q 'ok installed' && BIRD_WAS_INSTALLED=y || BIRD_WAS_INSTALLED=n
+BIRD_WAS_AUTO=n
+if [[ "$BIRD_WAS_INSTALLED" == 'y' ]] && apt-mark showauto bird2 2>/dev/null | grep -qx bird2; then
+	BIRD_WAS_AUTO=y
+fi
+
 # Проверка на OpenVZ и LXC
 if [[ "$(systemd-detect-virt)" == 'openvz' || "$(systemd-detect-virt)" == 'lxc' ]]; then
 	echo 'Error: OpenVZ and LXC are not supported!'
@@ -57,7 +79,13 @@ find /var/log -type f -exec truncate -s 0 {} +
 dpkg --configure -a >/dev/null
 apt-get install -f -y >/dev/null
 apt-get clean >/dev/null
+if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark manual bird2 >/dev/null
+fi
 apt-get autoremove --purge -y >/dev/null
+if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark auto bird2 >/dev/null
+fi
 
 # Проверка свободного места (минимум 2Гб)
 if [[ $(df --output=avail / | tail -n 1) -lt $((2 * 1024 * 1024)) ]]; then
@@ -103,6 +131,31 @@ echo
 until [[ "$WIREGUARD_ENABLE" =~ (y|n) ]]; do
 	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE
 done
+echo
+until [[ "$BGP_ENABLE" =~ (y|n) ]]; do
+	read -rp 'Enable private BGP route delivery for router clients? [y/n]: ' -e -i "$OLD_BGP_ENABLE" BGP_ENABLE
+done
+is_private_asn() {
+	[[ "$1" =~ ^[0-9]{1,10}$ ]] || return 1
+	(( (1 <= 10#$1 && 10#$1 <= 4294967294) && ((10#$1 >= 64512 && 10#$1 <= 65534) || 10#$1 >= 4200000000) ))
+}
+BGP_SERVER_ASN=
+BGP_CLIENT_ASN=
+if [[ "$BGP_ENABLE" == 'y' ]]; then
+	if [[ "$OPENVPN_UDP_ENABLE" != 'y' && "$OPENVPN_TCP_ENABLE" != 'y' && "$WIREGUARD_ENABLE" != 'y' ]]; then
+		echo 'BGP requires at least one enabled VPN protocol!'
+		exit 11
+	fi
+	until is_private_asn "$BGP_SERVER_ASN"; do
+		read -rp 'Private ASN for the AntiZapret BGP server: ' -e -i "$OLD_BGP_SERVER_ASN" BGP_SERVER_ASN
+	done
+	until is_private_asn "$BGP_CLIENT_ASN" && [[ "$BGP_CLIENT_ASN" != "$BGP_SERVER_ASN" ]]; do
+		read -rp 'Private ASN used by BGP clients: ' -e -i "$OLD_BGP_CLIENT_ASN" BGP_CLIENT_ASN
+	done
+else
+	BGP_SERVER_ASN="$OLD_BGP_SERVER_ASN"
+	BGP_CLIENT_ASN="$OLD_BGP_CLIENT_ASN"
+fi
 echo
 until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
 	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
@@ -308,6 +361,9 @@ systemctl disable --now openvpn-server@antizapret-tcp
 systemctl disable --now openvpn-server@vpn-tcp
 systemctl disable --now wg-quick@antizapret
 systemctl disable --now wg-quick@vpn
+if [[ "$BGP_ENABLE" == 'y' || "$MANAGED_BGP_PRESENT" == 'y' ]]; then
+	systemctl disable --now antizapret-bgp || true
+fi
 
 # Удалим ненужные службы
 apt-get purge -y ufw
@@ -435,8 +491,24 @@ if [[ "$OS" == 'ubuntu' ]] && (( VERSION < 26 )); then
 elif [[ "$OS" == 'debian' ]] && (( VERSION < 14 )); then
 	INSTALL="-t $CODENAME-backports linux-image-$ARCH linux-headers-$ARCH"
 fi
-apt-get install -y $INSTALL git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2
+BGP_PACKAGE=
+[[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2
+if [[ "$BGP_ENABLE" == 'y' && "$BIRD_WAS_INSTALLED" == 'n' ]]; then
+	# The distribution unit is not used; AntiZapret has an isolated instance.
+	systemctl disable --now bird.service || true
+fi
+if [[ "$BGP_ENABLE" == 'y' ]] && ss -H -ltn 'sport = :179' | grep -q .; then
+	echo 'Error: TCP port 179 is already used by another BGP service!'
+	exit 12
+fi
+if [[ "$BGP_ENABLE" != 'y' && "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark manual bird2 >/dev/null
+fi
 apt-get autoremove --purge -y
+if [[ "$BGP_ENABLE" != 'y' && "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark auto bird2 >/dev/null
+fi
 apt-get clean
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
@@ -448,6 +520,13 @@ PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --force-reinstall --user /tmp
 # Клонируем репозиторий antizapret
 rm -rf /tmp/antizapret
 git clone https://github.com/Nessusd/AntiZapret-VPN-ipv6.git /tmp/antizapret
+
+# A disabled BGP option must not install any BGP runtime files.
+if [[ "$BGP_ENABLE" != 'y' ]]; then
+	rm -f /tmp/antizapret/setup/root/antizapret/bgp-update.py
+	rm -f /tmp/antizapret/setup/root/antizapret/bgp-firewall.sh
+	rm -f /tmp/antizapret/setup/etc/systemd/system/antizapret-bgp.service
+fi
 
 # Сохраняем пользовательские настройки и обработчики custom*.sh
 cp /root/antizapret/config/*.txt /tmp/antizapret/setup/root/antizapret/config/ || true
@@ -491,6 +570,9 @@ echo "SETUP_DATE=$(date --iso-8601=seconds)
 OPENVPN_UDP_ENABLE=$OPENVPN_UDP_ENABLE
 OPENVPN_TCP_ENABLE=$OPENVPN_TCP_ENABLE
 WIREGUARD_ENABLE=$WIREGUARD_ENABLE
+BGP_ENABLE=$BGP_ENABLE
+BGP_SERVER_ASN=$BGP_SERVER_ASN
+BGP_CLIENT_ASN=$BGP_CLIENT_ASN
 DISABLE_IPV6=$DISABLE_IPV6
 VPN_IPV6_PREFIX=$VPN_IPV6_PREFIX
 OPENVPN_PATCH=$OPENVPN_PATCH
@@ -557,6 +639,17 @@ rm -rf /root/antizapret
 cp -r /tmp/antizapret/setup/* /
 rm -rf /tmp/dnslib
 rm -rf /tmp/antizapret
+
+if [[ "$BGP_ENABLE" == 'y' ]]; then
+	mkdir -p /etc/antizapret-bgp /var/lib/antizapret-bgp
+	chmod 755 /etc/antizapret-bgp /var/lib/antizapret-bgp
+	systemctl daemon-reload
+elif [[ "$MANAGED_BGP_PRESENT" == 'y' ]]; then
+	# Remove only files and state owned by the AntiZapret BGP instance.
+	rm -f /etc/systemd/system/antizapret-bgp.service
+	rm -rf /etc/antizapret-bgp /var/lib/antizapret-bgp /run/antizapret-bgp
+	systemctl daemon-reload
+fi
 
 # Настраиваем DNS в AntiZapret VPN
 if [[ "$ANTIZAPRET_DNS" == '2' ]]; then
@@ -672,6 +765,9 @@ fi
 if [[ "$WIREGUARD_ENABLE" == 'y' ]]; then
 	systemctl enable wg-quick@antizapret
 	systemctl enable wg-quick@vpn
+fi
+if [[ "$BGP_ENABLE" == 'y' ]]; then
+	systemctl enable antizapret-bgp
 fi
 
 ERRORS=
