@@ -23,8 +23,26 @@ if [[ -z "$DEFAULT_INTERFACE6" ]]; then
 fi
 PUBLIC_INTERFACE6="${DEFAULT_INTERFACE6:-${DEFAULT_INTERFACE:-}}"
 
+active_warp_ipv6_address() {
+	local interface=$1
+	ip link show dev "$interface" &>/dev/null || return 1
+	ip -6 -o address show dev "$interface" scope global 2>/dev/null | awk '
+		$3 == "inet6" {
+			split($4, address, "/")
+			print address[1]
+			exit
+		}'
+}
+
 ANTIZAPRET_IPV6_OUT_INTERFACE="${ANTIZAPRET_IPV6_OUT_INTERFACE:-${ANTIZAPRET_OUT_INTERFACE6:-}}"
 ANTIZAPRET_IPV6_OUT_IP="${ANTIZAPRET_IPV6_OUT_IP:-${ANTIZAPRET_OUT_IP6:-}}"
+if [[ -z "$ANTIZAPRET_IPV6_OUT_INTERFACE" && -z "$ANTIZAPRET_IPV6_OUT_IP" && "${ANTIZAPRET_WARP:-n}" == 'y' ]]; then
+	WARP_IPV6_ADDRESS="$(active_warp_ipv6_address warp-antizapret || true)"
+	if [[ -n "$WARP_IPV6_ADDRESS" ]]; then
+		ANTIZAPRET_IPV6_OUT_INTERFACE=warp-antizapret
+		ANTIZAPRET_IPV6_OUT_IP="$WARP_IPV6_ADDRESS"
+	fi
+fi
 if [[ -z "$ANTIZAPRET_IPV6_OUT_INTERFACE" ]]; then
 	ANTIZAPRET_IPV6_OUT_INTERFACE="$DEFAULT_INTERFACE6"
 	[[ -n "$ANTIZAPRET_IPV6_OUT_IP" ]] || ANTIZAPRET_IPV6_OUT_IP="$DEFAULT_IP6"
@@ -32,6 +50,13 @@ fi
 
 VPN_IPV6_OUT_INTERFACE="${VPN_IPV6_OUT_INTERFACE:-${VPN_OUT_INTERFACE6:-}}"
 VPN_IPV6_OUT_IP="${VPN_IPV6_OUT_IP:-${VPN_OUT_IP6:-}}"
+if [[ -z "$VPN_IPV6_OUT_INTERFACE" && -z "$VPN_IPV6_OUT_IP" && "${VPN_WARP:-n}" == 'y' ]]; then
+	WARP_IPV6_ADDRESS="$(active_warp_ipv6_address warp-vpn || true)"
+	if [[ -n "$WARP_IPV6_ADDRESS" ]]; then
+		VPN_IPV6_OUT_INTERFACE=warp-vpn
+		VPN_IPV6_OUT_IP="$WARP_IPV6_ADDRESS"
+	fi
+fi
 if [[ -z "$VPN_IPV6_OUT_INTERFACE" ]]; then
 	VPN_IPV6_OUT_INTERFACE="$DEFAULT_INTERFACE6"
 	[[ -n "$VPN_IPV6_OUT_IP" ]] || VPN_IPV6_OUT_IP="$DEFAULT_IP6"

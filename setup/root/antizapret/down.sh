@@ -36,12 +36,14 @@ fi
 
 WARP_ANTIZAPRET_INTERFACE=warp-antizapret
 WARP_ANTIZAPRET_PATH="/etc/wireguard/$WARP_ANTIZAPRET_INTERFACE.conf"
-WARP_ANTIZAPRET_IP=$(awk -F'= ' '/^Address/{print $2; exit}' "$WARP_ANTIZAPRET_PATH")
+WARP_ANTIZAPRET_IP=$(awk -F'= ' '/^Address/{split($2, addresses, ","); print addresses[1]; exit}' "$WARP_ANTIZAPRET_PATH")
+WARP_ANTIZAPRET_IP="${WARP_ANTIZAPRET_IP%%/*}"
 WARP_ANTIZAPRET_IP="${WARP_ANTIZAPRET_IP:-172.16.0.2}"
 
 WARP_VPN_INTERFACE=warp-vpn
 WARP_VPN_PATH="/etc/wireguard/$WARP_VPN_INTERFACE.conf"
-WARP_VPN_IP=$(awk -F'= ' '/^Address/{print $2; exit}' "$WARP_VPN_PATH")
+WARP_VPN_IP=$(awk -F'= ' '/^Address/{split($2, addresses, ","); print addresses[1]; exit}' "$WARP_VPN_PATH")
+WARP_VPN_IP="${WARP_VPN_IP%%/*}"
 WARP_VPN_IP="${WARP_VPN_IP:-172.16.0.2}"
 
 # filter

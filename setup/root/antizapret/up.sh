@@ -66,47 +66,146 @@ fi
 [[ "$ALTERNATIVE_FAKE_IP" == 'y' ]] && FAKE_IP="${FAKE_IP:-198.18}" || FAKE_IP="$IP.30"
 MTU="${MTU:-1420}"
 
+warp_ipv6_stack_available() {
+	[[ "${DISABLE_IPV6:-n}" != 'y' ]] || return 1
+	[[ -r /proc/sys/net/ipv6/conf/all/disable_ipv6 ]] || return 1
+	[[ -r /proc/sys/net/ipv6/conf/default/disable_ipv6 ]] || return 1
+	[[ "$(< /proc/sys/net/ipv6/conf/all/disable_ipv6)" == '0' ]] || return 1
+	[[ "$(< /proc/sys/net/ipv6/conf/default/disable_ipv6)" == '0' ]]
+}
+
+warp_ipv6_parameters() {
+	python3 - "$1" "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" <<'PY'
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1].split("/", 1)[0])
+    prefix = ipaddress.ip_network(sys.argv[2], strict=True)
+except ValueError:
+    raise SystemExit(1)
+
+if not isinstance(address, ipaddress.IPv6Address) or not address.is_global:
+    raise SystemExit(1)
+if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:
+    raise SystemExit(1)
+if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
+    raise SystemExit(1)
+
+print(address.compressed, prefix.with_prefixlen)
+PY
+}
+
+write_warp_config() {
+	local mode=$1 path=$2 private_key=$3 address4=$4 address6=$5
+	local public_key=$6 endpoint=$7 table=$8
+	local client_network mark address_line allowed_ips
+
+	if [[ "$mode" == 'antizapret' ]]; then
+		client_network="$IP.29.0.0/16"
+		mark='0x10000000/0x30000000'
+	else
+		client_network="$IP.28.0.0/16"
+		mark='0x20000000/0x30000000'
+	fi
+
+	address_line="$address4/32"
+	allowed_ips='0.0.0.0/0'
+	if [[ -n "$address6" ]]; then
+		address_line+=", $address6/128"
+		allowed_ips+=', ::/0'
+	fi
+
+	{
+		printf '[Interface]\n'
+		printf 'PrivateKey = %s\n' "$private_key"
+		printf 'Address = %s\n' "$address_line"
+		printf 'MTU = %s\n' "$MTU"
+		printf 'Table = %s\n' "$table"
+		printf 'PostUp = ip rule add from %s to %s lookup main priority 5000 || true\n' "$client_network" "$client_network"
+		if [[ "$mode" == 'antizapret' ]]; then
+			printf 'PostUp = ip rule add from %s to %s lookup main priority 5000 || true\n' "$client_network" "$FAKE_IP.0.0/15"
+		fi
+		printf 'PostUp = ip rule add from %s lookup %s priority 10000 || true\n' "$client_network" "$table"
+		printf 'PostDown = ip rule del from %s to %s priority 5000\n' "$client_network" "$client_network"
+		if [[ "$mode" == 'antizapret' ]]; then
+			printf 'PostDown = ip rule del from %s to %s priority 5000\n' "$client_network" "$FAKE_IP.0.0/15"
+		fi
+		printf 'PostDown = ip rule del from %s lookup %s priority 10000\n' "$client_network" "$table"
+		if [[ -n "$address6" ]]; then
+			printf 'PostUp = ip -6 rule add fwmark %s to %s lookup main priority 5000 || true\n' "$mark" "$WARP_IPV6_PREFIX"
+			printf 'PostUp = ip -6 rule add fwmark %s lookup %s priority 10000 || true\n' "$mark" "$table"
+			printf 'PostDown = ip -6 rule del fwmark %s to %s lookup main priority 5000 || true\n' "$mark" "$WARP_IPV6_PREFIX"
+			printf 'PostDown = ip -6 rule del fwmark %s lookup %s priority 10000 || true\n' "$mark" "$table"
+		fi
+		printf '\n[Peer]\n'
+		printf 'PublicKey = %s\n' "$public_key"
+		printf 'AllowedIPs = %s\n' "$allowed_ips"
+		printf 'PersistentKeepalive = 15\n'
+		printf 'Endpoint = %s\n' "$endpoint"
+	} > "$path"
+}
+
+start_warp() {
+	local mode=$1 interface=$2 path=$3 table=$4 ipv6_requested=$5
+	local private_key key reg public_key endpoint address4 address6 ipv6_data
+
+	echo "Starting $interface..."
+	private_key=$(wg genkey)
+	key=$(echo "$private_key" | wg pubkey)
+	reg=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
+		-H 'Content-Type: application/json' \
+		-d "{\"key\": \"$key\"}")
+
+	public_key=$(echo "$reg" | jq -r '.config.peers[0].public_key')
+	endpoint=$(echo "$reg" | jq -r '.config.peers[0].endpoint.host')
+	address4=$(echo "$reg" | jq -r '.config.interface.addresses.v4')
+	address6=
+	WARP_IPV6_PREFIX=
+	if [[ "$ipv6_requested" == 'y' ]] && warp_ipv6_stack_available; then
+		ipv6_data=$(warp_ipv6_parameters "$(echo "$reg" | jq -r '.config.interface.addresses.v6 // empty')" 2>/dev/null)
+		if [[ $? -eq 0 ]]; then
+			read -r address6 WARP_IPV6_PREFIX <<< "$ipv6_data"
+		fi
+	fi
+
+	write_warp_config "$mode" "$path" "$private_key" "$address4" "$address6" "$public_key" "$endpoint" "$table"
+	wg-quick up "$path" 2>/dev/null
+	WARP_START_STATUS=$?
+
+	# IPv6 must never make the established IPv4 WARP path unavailable.
+	if [[ $WARP_START_STATUS -ne 0 && -n "$address6" ]]; then
+		echo "Starting $interface with IPv6 failed! Retrying IPv4-only..."
+		wg-quick down "$path" &>/dev/null || true
+		ip link delete dev "$interface" &>/dev/null || true
+		address6=
+		WARP_IPV6_PREFIX=
+		write_warp_config "$mode" "$path" "$private_key" "$address4" "$address6" "$public_key" "$endpoint" "$table"
+		wg-quick up "$path" 2>/dev/null
+		WARP_START_STATUS=$?
+	fi
+
+	WARP_START_ENDPOINT="$endpoint"
+	WARP_START_ADDRESS4="$address4"
+	WARP_START_ADDRESS6="$address6"
+}
+
 # WARP AntiZapret
 WARP_ANTIZAPRET_INTERFACE=warp-antizapret
 WARP_ANTIZAPRET_PATH="/etc/wireguard/$WARP_ANTIZAPRET_INTERFACE.conf"
 
 if [[ "$ANTIZAPRET_WARP" == 'y' ]]; then
 	set +e
-	echo "Starting $WARP_ANTIZAPRET_INTERFACE..."
-	PRIVATE_KEY=$(wg genkey)
-	KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
-	REG=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
-		-H 'Content-Type: application/json' \
-		-d "{\"key\": \"$KEY\"}")
+	WARP_IPV6_REQUESTED=y
+	if [[ -n "${ANTIZAPRET_IPV6_OUT_INTERFACE:-${ANTIZAPRET_OUT_INTERFACE6:-}}" || -n "${ANTIZAPRET_IPV6_OUT_IP:-${ANTIZAPRET_OUT_IP6:-}}" ]]; then
+		WARP_IPV6_REQUESTED=n
+	fi
+	start_warp antizapret "$WARP_ANTIZAPRET_INTERFACE" "$WARP_ANTIZAPRET_PATH" 13335 "$WARP_IPV6_REQUESTED"
 
-	WARP_PUBLIC_KEY=$(echo "$REG" | jq -r '.config.peers[0].public_key')
-	WARP_ENDPOINT=$(echo "$REG" | jq -r '.config.peers[0].endpoint.host')
-	WARP_ADDRESS=$(echo "$REG" | jq -r '.config.interface.addresses.v4')
-
-	echo "[Interface]
-PrivateKey = $PRIVATE_KEY
-Address = $WARP_ADDRESS/32
-MTU = $MTU
-Table = 13335
-PostUp = ip rule add from $IP.29.0.0/16 to $IP.29.0.0/16 lookup main priority 5000 || true
-PostUp = ip rule add from $IP.29.0.0/16 to $FAKE_IP.0.0/15 lookup main priority 5000 || true
-PostUp = ip rule add from $IP.29.0.0/16 lookup 13335 priority 10000 || true
-PostDown = ip rule del from $IP.29.0.0/16 to $IP.29.0.0/16 priority 5000
-PostDown = ip rule del from $IP.29.0.0/16 to $FAKE_IP.0.0/15 priority 5000
-PostDown = ip rule del from $IP.29.0.0/16 lookup 13335 priority 10000
-
-[Peer]
-PublicKey = $WARP_PUBLIC_KEY
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 15
-Endpoint = $WARP_ENDPOINT" > $WARP_ANTIZAPRET_PATH
-
-	wg-quick up $WARP_ANTIZAPRET_PATH 2>/dev/null
-
-	if [[ $? -eq 0 ]]; then
-		echo "Started $WARP_ANTIZAPRET_INTERFACE: $WARP_ENDPOINT connected"
+	if [[ $WARP_START_STATUS -eq 0 ]]; then
+		echo "Started $WARP_ANTIZAPRET_INTERFACE: $WARP_START_ENDPOINT connected"
 		ANTIZAPRET_OUT_INTERFACE=$WARP_ANTIZAPRET_INTERFACE
-		ANTIZAPRET_OUT_IP=$WARP_ADDRESS
+		ANTIZAPRET_OUT_IP=$WARP_START_ADDRESS4
 	else
 		echo "Starting $WARP_ANTIZAPRET_INTERFACE failed! Use $DEFAULT_INTERFACE"
 	fi
@@ -121,39 +220,16 @@ WARP_VPN_PATH="/etc/wireguard/$WARP_VPN_INTERFACE.conf"
 
 if [[ "$VPN_WARP" == 'y' ]]; then
 	set +e
-	echo "Starting $WARP_VPN_INTERFACE..."
-	PRIVATE_KEY=$(wg genkey)
-	KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
-	REG=$(curl -sSfL --connect-timeout 10 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
-		-H 'Content-Type: application/json' \
-		-d "{\"key\": \"$KEY\"}")
+	WARP_IPV6_REQUESTED=y
+	if [[ -n "${VPN_IPV6_OUT_INTERFACE:-${VPN_OUT_INTERFACE6:-}}" || -n "${VPN_IPV6_OUT_IP:-${VPN_OUT_IP6:-}}" ]]; then
+		WARP_IPV6_REQUESTED=n
+	fi
+	start_warp vpn "$WARP_VPN_INTERFACE" "$WARP_VPN_PATH" 13336 "$WARP_IPV6_REQUESTED"
 
-	WARP_PUBLIC_KEY=$(echo "$REG" | jq -r '.config.peers[0].public_key')
-	WARP_ENDPOINT=$(echo "$REG" | jq -r '.config.peers[0].endpoint.host')
-	WARP_ADDRESS=$(echo "$REG" | jq -r '.config.interface.addresses.v4')
-
-	echo "[Interface]
-PrivateKey = $PRIVATE_KEY
-Address = $WARP_ADDRESS/32
-MTU = $MTU
-Table = 13336
-PostUp = ip rule add from $IP.28.0.0/16 to $IP.28.0.0/16 lookup main priority 5000 || true
-PostUp = ip rule add from $IP.28.0.0/16 lookup 13336 priority 10000 || true
-PostDown = ip rule del from $IP.28.0.0/16 to $IP.28.0.0/16 priority 5000
-PostDown = ip rule del from $IP.28.0.0/16 lookup 13336 priority 10000
-
-[Peer]
-PublicKey = $WARP_PUBLIC_KEY
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 15
-Endpoint = $WARP_ENDPOINT" > $WARP_VPN_PATH
-
-	wg-quick up $WARP_VPN_PATH 2>/dev/null
-
-	if [[ $? -eq 0 ]]; then
-		echo "Started $WARP_VPN_INTERFACE: $WARP_ENDPOINT connected"
+	if [[ $WARP_START_STATUS -eq 0 ]]; then
+		echo "Started $WARP_VPN_INTERFACE: $WARP_START_ENDPOINT connected"
 		VPN_OUT_INTERFACE=$WARP_VPN_INTERFACE
-		VPN_OUT_IP=$WARP_ADDRESS
+		VPN_OUT_IP=$WARP_START_ADDRESS4
 	else
 		echo "Starting $WARP_VPN_INTERFACE failed! Use $DEFAULT_INTERFACE"
 	fi
