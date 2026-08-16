@@ -71,17 +71,17 @@ do
 	break
 done
 echo
-until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
+until [[ "$DISABLE_IPV6" =~ ^[yn]$ ]]; do
 	read -rp 'Disable IPv6 on this proxy server? [y/n]: ' -e -i n DISABLE_IPV6
 done
 echo
 echo 'Warning! SSH protection may block your IP after 5 logins/minute!'
-until [[ "$SSH_PROTECTION" =~ (y|n) ]]; do
+until [[ "$SSH_PROTECTION" =~ ^[yn]$ ]]; do
 	read -rp 'Enable SSH brute-force protection? [y/n]: ' -e -i y SSH_PROTECTION
 done
 echo
 echo 'Warning! Scan protection blocks ping and closed-port replies!'
-until [[ "$SCAN_PROTECTION" =~ (y|n) ]]; do
+until [[ "$SCAN_PROTECTION" =~ ^[yn]$ ]]; do
 	read -rp 'Enable network scan protection? [y/n]: ' -e -i y SCAN_PROTECTION
 done
 echo

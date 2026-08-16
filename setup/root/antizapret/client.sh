@@ -630,47 +630,87 @@ backup(){
 restore(){
 	echo
 
-	if [[ -e /root/backup*.tar.gz ]]; then
-		rm -rf /root/easyrsa3
-		rm -rf /root/wireguard
-		rm -rf /root/config
-		rm -rf /root/knot-resolver
-		rm -rf /root/custom
-		rm -rf /root/openvpn-ccd
+	local backup_archives=(/root/backup*.tar.gz)
+	local backup_archive=
+	local restore_root=/root
+	local restore_staging=
+	if (( ${#backup_archives[@]} > 1 )); then
+		echo 'Multiple backup*.tar.gz archives found in /root. Leave exactly one archive:'
+		printf '  %s\n' "${backup_archives[@]}"
+		exit 8
+	fi
+	if (( ${#backup_archives[@]} == 1 )); then
+		backup_archive="${backup_archives[0]}"
+		if ! tar -tzf "$backup_archive" >/dev/null; then
+			echo "Invalid or unreadable backup archive: $backup_archive"
+			exit 8
+		fi
+		restore_staging="$(mktemp -d /tmp/antizapret-restore.XXXXXX)"
+		trap '[[ -z "${restore_staging:-}" ]] || rm -rf -- "$restore_staging"' EXIT
+		if ! tar -xzf "$backup_archive" -C "$restore_staging" --no-same-owner --no-same-permissions; then
+			rm -rf -- "$restore_staging"
+			restore_staging=
+			echo "Cannot extract backup archive: $backup_archive"
+			exit 8
+		fi
+		restore_root="$restore_staging"
 	fi
 
-	tar -xzf /root/backup*.tar.gz -C /root || true
-	rm -f /root/backup*.tar.gz || true
-
-	if [[ ! -d /root/easyrsa3 && ! -d /root/openvpn-ccd && ! -d /root/wireguard && ! -d /root/config && ! -d /root/knot-resolver && ! -d /root/custom ]]; then
+	if [[ ! -d "$restore_root/easyrsa3" && ! -d "$restore_root/openvpn-ccd" && ! -d "$restore_root/wireguard" && ! -d "$restore_root/config" && ! -d "$restore_root/knot-resolver" && ! -d "$restore_root/custom" ]]; then
+		if [[ -n "$restore_staging" ]]; then
+			rm -rf -- "$restore_staging"
+			restore_staging=
+		fi
 		echo 'Backup not found! Upload backup*.tar.gz to /root, or extract folders to /root: easyrsa3, openvpn-ccd, wireguard, config, knot-resolver, custom'
 		exit 8
 	fi
 
-	if [[ -d /root/easyrsa3/pki ]]; then
+	if [[ -d "$restore_root/easyrsa3/pki" ]]; then
 		rm -rf /etc/openvpn/easyrsa3/*
 	fi
 
-	cp -r /root/easyrsa3/* /etc/openvpn/easyrsa3/ || true
 	mkdir -p /etc/openvpn/server/ccd /etc/openvpn/server/ccd2
-	cp -a /root/openvpn-ccd/ccd/* /etc/openvpn/server/ccd/ || true
-	cp -a /root/openvpn-ccd/ccd2/* /etc/openvpn/server/ccd2/ || true
-	cp /root/wireguard/* /etc/wireguard/ || true
-	cp /root/config/* /root/antizapret/config/ || true
-	cp /root/knot-resolver/* /etc/knot-resolver/ || true
-	cp /root/custom/* /root/antizapret/ || true
+	if [[ -d "$restore_root/easyrsa3" ]]; then
+		cp -a "$restore_root/easyrsa3/." /etc/openvpn/easyrsa3/
+	fi
+	if [[ -d "$restore_root/openvpn-ccd/ccd" ]]; then
+		cp -a "$restore_root/openvpn-ccd/ccd/." /etc/openvpn/server/ccd/
+	fi
+	if [[ -d "$restore_root/openvpn-ccd/ccd2" ]]; then
+		cp -a "$restore_root/openvpn-ccd/ccd2/." /etc/openvpn/server/ccd2/
+	fi
+	if [[ -d "$restore_root/wireguard" ]]; then
+		cp -a "$restore_root/wireguard/." /etc/wireguard/
+	fi
+	if [[ -d "$restore_root/config" ]]; then
+		cp -a "$restore_root/config/." /root/antizapret/config/
+	fi
+	if [[ -d "$restore_root/knot-resolver" ]]; then
+		cp -a "$restore_root/knot-resolver/." /etc/knot-resolver/
+	fi
+	if [[ -d "$restore_root/custom" ]]; then
+		cp -a "$restore_root/custom/." /root/antizapret/
+	fi
 
+	# После успешного копирования удаляем и заранее распакованные источники.
+	# Иначе следующий запуск без архива может принять их за актуальный backup.
 	rm -rf /root/easyrsa3
 	rm -rf /root/wireguard
 	rm -rf /root/config
 	rm -rf /root/knot-resolver
 	rm -rf /root/custom
 	rm -rf /root/openvpn-ccd
+	if [[ "$restore_root" != /root ]]; then
+		rm -rf -- "$restore_staging"
+		restore_staging=
+		trap - EXIT
+	fi
 
 	./doall.sh ip
 	initWireGuard
 	initOpenVPN
 	recreate
+	[[ -n "$backup_archive" ]] && rm -f -- "$backup_archive"
 
 	echo "Configuration and clients restored from backup"
 	echo 'Rebooting...'

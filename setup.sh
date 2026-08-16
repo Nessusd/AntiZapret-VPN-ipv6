@@ -20,15 +20,54 @@ fi
 
 cd /root
 
-# Запоминаем только управляемые BGP-настройки предыдущей установки.
+# Проверяем загруженный архив до изменения установленной системы. Несколько
+# архивов неоднозначны: выбор по порядку glob мог восстановить не тот backup.
+BACKUP_ARCHIVES=()
+mapfile -d '' -t BACKUP_ARCHIVES < <(find /root -maxdepth 1 -type f -name 'backup*.tar.gz' -print0)
+if (( ${#BACKUP_ARCHIVES[@]} > 1 )); then
+	echo 'Error: Multiple backup*.tar.gz archives found in /root. Leave exactly one archive and restart installation:'
+	printf '  %s\n' "${BACKUP_ARCHIVES[@]}"
+	exit 13
+fi
+BACKUP_ARCHIVE="${BACKUP_ARCHIVES[0]-}"
+if [[ -n "$BACKUP_ARCHIVE" ]] && ! tar -tzf "$BACKUP_ARCHIVE" >/dev/null; then
+	echo "Error: Invalid or unreadable backup archive: $BACKUP_ARCHIVE"
+	exit 13
+fi
+backup_has_supported_directory() {
+	local entry
+	while IFS= read -r entry; do
+		entry="${entry#./}"
+		case "$entry" in
+			easyrsa3|easyrsa3/*|openvpn-ccd|openvpn-ccd/*|wireguard|wireguard/*|config|config/*|knot-resolver|knot-resolver/*|custom|custom/*)
+				return 0
+				;;
+		esac
+	done < <(tar -tzf "$1")
+	return 1
+}
+if [[ -n "$BACKUP_ARCHIVE" ]] && ! backup_has_supported_directory "$BACKUP_ARCHIVE"; then
+	echo "Error: Backup archive contains no supported configuration directories: $BACKUP_ARCHIVE"
+	exit 13
+fi
+
+# Запоминаем управляемые настройки предыдущей установки. Значения IPv6 из
+# окружения сохраняются отдельно: явный override должен иметь высший приоритет.
+ENV_VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX-}"
+ENV_WIREGUARD_IPV6_PREFIX="${WIREGUARD_IPV6_PREFIX-}"
 OLD_BGP_ENABLE=n
 OLD_BGP_SERVER_ASN=4200000290
 OLD_BGP_CLIENT_ASN=4200000291
+OLD_VPN_IPV6_PREFIX=
 MANAGED_BGP_PRESENT=n
 if [[ -f /root/antizapret/setup ]]; then
 	OLD_BGP_ENABLE="$(sed -n 's/^BGP_ENABLE=\([yn]\)$/\1/p' /root/antizapret/setup | tail -n 1)"
 	OLD_BGP_SERVER_ASN="$(sed -n 's/^BGP_SERVER_ASN=\([0-9]\+\)$/\1/p' /root/antizapret/setup | tail -n 1)"
 	OLD_BGP_CLIENT_ASN="$(sed -n 's/^BGP_CLIENT_ASN=\([0-9]\+\)$/\1/p' /root/antizapret/setup | tail -n 1)"
+	OLD_VPN_IPV6_PREFIX="$(sed -n 's/^VPN_IPV6_PREFIX=//p' /root/antizapret/setup | tail -n 1)"
+	if [[ -z "$OLD_VPN_IPV6_PREFIX" ]]; then
+		OLD_VPN_IPV6_PREFIX="$(sed -n 's/^WIREGUARD_IPV6_PREFIX=//p' /root/antizapret/setup | tail -n 1)"
+	fi
 fi
 OLD_BGP_ENABLE="${OLD_BGP_ENABLE:-n}"
 OLD_BGP_SERVER_ASN="${OLD_BGP_SERVER_ASN:-4200000290}"
@@ -120,19 +159,19 @@ if (( MTU < 1500 )); then
 fi
 
 # Спрашиваем о настройках
-until [[ "$OPENVPN_UDP_ENABLE" =~ (y|n) ]]; do
+until [[ "$OPENVPN_UDP_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable OpenVPN UDP? [y/n]: ' -e -i y OPENVPN_UDP_ENABLE
 done
 echo
-until [[ "$OPENVPN_TCP_ENABLE" =~ (y|n) ]]; do
+until [[ "$OPENVPN_TCP_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable OpenVPN TCP? [y/n]: ' -e -i n OPENVPN_TCP_ENABLE
 done
 echo
-until [[ "$WIREGUARD_ENABLE" =~ (y|n) ]]; do
+until [[ "$WIREGUARD_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE
 done
 echo
-until [[ "$BGP_ENABLE" =~ (y|n) ]]; do
+until [[ "$BGP_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable private BGP route delivery for router clients? [y/n]: ' -e -i "$OLD_BGP_ENABLE" BGP_ENABLE
 done
 is_private_asn() {
@@ -157,10 +196,40 @@ else
 	BGP_CLIENT_ASN="$OLD_BGP_CLIENT_ASN"
 fi
 echo
-until [[ "$DISABLE_IPV6" =~ (y|n) ]]; do
+until [[ "$DISABLE_IPV6" =~ ^[yn]$ ]]; do
 	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
 done
-VPN_IPV6_PREFIX="${VPN_IPV6_PREFIX:-${WIREGUARD_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}"
+VPN_IPV6_PREFIX="${ENV_VPN_IPV6_PREFIX:-${ENV_WIREGUARD_IPV6_PREFIX:-${OLD_VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}}"
+validate_vpn_ipv6_prefix_with_python() {
+	python3 - "$1" <<'PY'
+import ipaddress
+import sys
+
+try:
+    prefix = ipaddress.ip_network(sys.argv[1], strict=True)
+except ValueError as exc:
+    print(f"Error: Invalid VPN IPv6 prefix: {exc}")
+    raise SystemExit(1) from exc
+
+if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:
+    print("Error: VPN IPv6 prefix must be an IPv6 /48 network")
+    raise SystemExit(1)
+if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
+    print("Error: VPN IPv6 prefix must be a private ULA /48 network")
+    raise SystemExit(1)
+PY
+}
+# Python is normally present on supported systems. On a minimal image perform
+# an early structural ULA /48 check, then repeat the authoritative validation
+# immediately after Python is installed.
+if command -v python3 >/dev/null; then
+	if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
+		exit 14
+	fi
+elif ! [[ "$VPN_IPV6_PREFIX" =~ ^[Ff][CcDd][0-9A-Fa-f]{2}:[0-9A-Fa-f:]+\/48$ ]]; then
+	echo 'Error: VPN IPv6 prefix must be a private ULA /48 network'
+	exit 14
+fi
 echo
 echo 'Choose anti-censorship patch for OpenVPN (UDP only):'
 echo '    0) None        - Do not install anti-censorship patch, or remove if already installed'
@@ -171,15 +240,15 @@ until [[ "$OPENVPN_PATCH" =~ ^[0-2]$ ]]; do
 done
 echo
 echo 'OpenVPN DCO lowers CPU load, boosts data speeds, and only supports AES-128-GCM, AES-256-GCM and CHACHA20-POLY1305 encryption'
-until [[ "$OPENVPN_DCO" =~ (y|n) ]]; do
+until [[ "$OPENVPN_DCO" =~ ^[yn]$ ]]; do
 	read -rp 'Turn on OpenVPN DCO? [y/n]: ' -e -i y OPENVPN_DCO
 done
 echo
-until [[ "$ANTIZAPRET_WARP" =~ (y|n) ]]; do
+until [[ "$ANTIZAPRET_WARP" =~ ^[yn]$ ]]; do
 	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002AntiZapret VPN\e[0m\002 (antizapret-*) outbound traffic? [y/n]: ' -e -i n ANTIZAPRET_WARP
 done
 echo
-until [[ "$VPN_WARP" =~ (y|n) ]]; do
+until [[ "$VPN_WARP" =~ ^[yn]$ ]]; do
 	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002full VPN\e[0m\002 (vpn-*) outbound traffic? [y/n]: ' -e -i n VPN_WARP
 done
 echo
@@ -217,68 +286,68 @@ until [[ "$VPN_DNS" =~ ^[1-8]$ ]]; do
 	read -rp 'DNS choice [1-8]: ' -e -i 1 VPN_DNS
 done
 echo
-until [[ "$BLOCK_ADS" =~ (y|n) ]]; do
+until [[ "$BLOCK_ADS" =~ ^[yn]$ ]]; do
 	read -rp $'Enable blocking ads, trackers, malware and phishing websites in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 (antizapret-*) based on AdGuard and OISD rules? [y/n]: ' -e -i y BLOCK_ADS
 done
 echo
 echo 'Default CLIENT IP address range:     10.28.0.0/15'
 echo 'Alternative CLIENT IP address range: 172.28.0.0/15'
-until [[ "$ALTERNATIVE_CLIENT_IP" =~ (y|n) ]]; do
+until [[ "$ALTERNATIVE_CLIENT_IP" =~ ^[yn]$ ]]; do
 	read -rp 'Use alternative CLIENT IP address range? [y/n]: ' -e -i n ALTERNATIVE_CLIENT_IP
 done
 echo
 [[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]] && IP=172 || IP=10
 echo "Default FAKE IP address range:     $IP.30.0.0/15"
 echo 'Alternative FAKE IP address range: 198.18.0.0/15'
-until [[ "$ALTERNATIVE_FAKE_IP" =~ (y|n) ]]; do
+until [[ "$ALTERNATIVE_FAKE_IP" =~ ^[yn]$ ]]; do
 	read -rp 'Use alternative range of FAKE IP addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IP
 done
 echo
-until [[ "$OPENVPN_BACKUP_TCP" =~ (y|n) ]]; do
+until [[ "$OPENVPN_BACKUP_TCP" =~ ^[yn]$ ]]; do
 	read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP
 done
 echo
-until [[ "$OPENVPN_BACKUP_UDP" =~ (y|n) ]]; do
+until [[ "$OPENVPN_BACKUP_UDP" =~ ^[yn]$ ]]; do
 	read -rp 'Use UDP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i y OPENVPN_BACKUP_UDP
 done
 echo
-until [[ "$WIREGUARD_BACKUP" =~ (y|n) ]]; do
+until [[ "$WIREGUARD_BACKUP" =~ ^[yn]$ ]]; do
 	read -rp 'Use UDP ports 540, 580 as backup for WireGuard/AmneziaWG connections? [y/n]: ' -e -i y WIREGUARD_BACKUP
 done
 echo
-until [[ "$OPENVPN_DUPLICATE" =~ (y|n) ]]; do
+until [[ "$OPENVPN_DUPLICATE" =~ ^[yn]$ ]]; do
 	read -rp 'Allow multiple clients connecting to OpenVPN using same profile file (*.ovpn)? [y/n]: ' -e -i y OPENVPN_DUPLICATE
 done
 echo
-until [[ "$OPENVPN_LOG" =~ (y|n) ]]; do
+until [[ "$OPENVPN_LOG" =~ ^[yn]$ ]]; do
 	read -rp 'Enable detailed logs in OpenVPN? [y/n]: ' -e -i n OPENVPN_LOG
 done
 echo
 echo 'Warning! SSH protection may block your IP after 5 logins/minute!'
-until [[ "$SSH_PROTECTION" =~ (y|n) ]]; do
+until [[ "$SSH_PROTECTION" =~ ^[yn]$ ]]; do
 	read -rp 'Enable SSH brute-force protection? [y/n]: ' -e -i y SSH_PROTECTION
 done
 echo
 echo 'Warning! Attack protection may block VPN or third-party applications!'
-until [[ "$ATTACK_PROTECTION" =~ (y|n) ]]; do
+until [[ "$ATTACK_PROTECTION" =~ ^[yn]$ ]]; do
 	read -rp 'Enable network attack protection? [y/n]: ' -e -i y ATTACK_PROTECTION
 done
 echo
 echo 'Warning! Scan protection blocks ping and closed-port replies!'
-until [[ "$SCAN_PROTECTION" =~ (y|n) ]]; do
+until [[ "$SCAN_PROTECTION" =~ ^[yn]$ ]]; do
 	read -rp 'Enable network scan protection? [y/n]: ' -e -i y SCAN_PROTECTION
 done
 echo
 echo 'Warning! Torrent guard blocks VPN traffic for 1 minute on torrent detection!'
-until [[ "$TORRENT_GUARD" =~ (y|n) ]]; do
+until [[ "$TORRENT_GUARD" =~ ^[yn]$ ]]; do
 	read -rp $'Enable torrent guard for \001\e[1;32m\002full VPN\001\e[0m\002? [y/n]: ' -e -i y TORRENT_GUARD
 done
 echo
-until [[ "$RESTRICT_FORWARD" =~ (y|n) ]]; do
+until [[ "$RESTRICT_FORWARD" =~ ^[yn]$ ]]; do
 	read -rp $'Restrict forwarding in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 to IPs from config/forward-ips.txt and result/route-ips.txt? [y/n]: ' -e -i y RESTRICT_FORWARD
 done
 echo
-until [[ "$CLIENT_ISOLATION" =~ (y|n) ]]; do
+until [[ "$CLIENT_ISOLATION" =~ ^[yn]$ ]]; do
 	read -rp $'Enable \001\e[1;32m\002all VPN\001\e[0m\002 client and server isolation? [y/n]: ' -e -i y CLIENT_ISOLATION
 done
 echo
@@ -294,51 +363,51 @@ do
 	[[ -n $(getent ahostsv4 "$WIREGUARD_HOST") ]] && break
 done
 echo
-until [[ "$ROUTE_ALL" =~ (y|n) ]]; do
+until [[ "$ROUTE_ALL" =~ ^[yn]$ ]]; do
 	read -rp $'Route all traffic for domains via \001\e[1;32m\002AntiZapret VPN\001\e[0m\002, excluding Russian domains and domains from config/exclude-hosts.txt? [y/n]: ' -e -i n ROUTE_ALL
 done
 echo
-until [[ "$DISCORD_INCLUDE" =~ (y|n) ]]; do
+until [[ "$DISCORD_INCLUDE" =~ ^[yn]$ ]]; do
 	read -rp $'Obsolete! Include Discord voice IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n DISCORD_INCLUDE
 done
 echo
-until [[ "$CLOUDFLARE_INCLUDE" =~ (y|n) ]]; do
+until [[ "$CLOUDFLARE_INCLUDE" =~ ^[yn]$ ]]; do
 	read -rp $'Include Cloudflare IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y CLOUDFLARE_INCLUDE
 done
 echo
-until [[ "$TELEGRAM_INCLUDE" =~ (y|n) ]]; do
+until [[ "$TELEGRAM_INCLUDE" =~ ^[yn]$ ]]; do
 	read -rp $'Include Telegram IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y TELEGRAM_INCLUDE
 done
 echo
-until [[ "$WHATSAPP_INCLUDE" =~ (y|n) ]]; do
+until [[ "$WHATSAPP_INCLUDE" =~ ^[yn]$ ]]; do
 	read -rp $'Include WhatsApp IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y WHATSAPP_INCLUDE
 done
 echo
-until [[ "$ROBLOX_INCLUDE" =~ (y|n) ]]; do
+until [[ "$ROBLOX_INCLUDE" =~ ^[yn]$ ]]; do
 	read -rp $'Include Roblox IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n ROBLOX_INCLUDE
 done
 echo
-#until [[ "$AMAZON_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$AMAZON_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include Amazon IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AMAZON_INCLUDE
 #done
 #echo
-#until [[ "$HETZNER_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$HETZNER_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include Hetzner IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n HETZNER_INCLUDE
 #done
 #echo
-#until [[ "$DIGITALOCEAN_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$DIGITALOCEAN_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include DigitalOcean IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n DIGITALOCEAN_INCLUDE
 #done
 #echo
-#until [[ "$OVH_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$OVH_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include OVH IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n OVH_INCLUDE
 #done
 #echo
-#until [[ "$GOOGLE_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$GOOGLE_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include Google IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n GOOGLE_INCLUDE
 #done
 #echo
-#until [[ "$AKAMAI_INCLUDE" =~ (y|n) ]]; do
+#until [[ "$AKAMAI_INCLUDE" =~ ^[yn]$ ]]; do
 #	read -rp $'Include Akamai IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AKAMAI_INCLUDE
 #done
 #echo
@@ -493,7 +562,10 @@ elif [[ "$OS" == 'debian' ]] && (( VERSION < 14 )); then
 fi
 BGP_PACKAGE=
 [[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
-apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate
+if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
+	exit 14
+fi
 if [[ "$BGP_ENABLE" == 'y' && "$BIRD_WAS_INSTALLED" == 'n' ]]; then
 	# The distribution unit is not used; AntiZapret has an isolated instance.
 	systemctl disable --now bird.service || true
@@ -533,36 +605,71 @@ cp /root/antizapret/config/*.txt /tmp/antizapret/setup/root/antizapret/config/ |
 cp /root/antizapret/custom*.sh /tmp/antizapret/setup/root/antizapret/ || true
 cp /etc/knot-resolver/*.lua /tmp/antizapret/setup/etc/knot-resolver/ || true
 
-# Восстанавливаем из бэкапа пользовательские настройки и обработчики custom*.sh, пользователей OpenVPN и WireGuard
-if [[ -e /root/backup*.tar.gz ]]; then
-	rm -rf /root/easyrsa3
-	rm -rf /root/wireguard
-	rm -rf /root/config
-	rm -rf /root/knot-resolver
-	rm -rf /root/custom
-	rm -rf /root/openvpn-ccd
+# Восстанавливаем из единственного проверенного архива в отдельный staging.
+# Без архива сохраняется совместимость с заранее распакованными каталогами в /root.
+BACKUP_STAGING=
+RESTORE_ROOT=/root
+if [[ -n "$BACKUP_ARCHIVE" ]]; then
+	BACKUP_STAGING="$(mktemp -d /tmp/antizapret-backup.XXXXXX)"
+	trap '[[ -z "${BACKUP_STAGING:-}" ]] || rm -rf -- "$BACKUP_STAGING"' EXIT
+	if ! tar -xzf "$BACKUP_ARCHIVE" -C "$BACKUP_STAGING" --no-same-owner --no-same-permissions; then
+		rm -rf -- "$BACKUP_STAGING"
+		BACKUP_STAGING=
+		echo "Error: Cannot extract backup archive: $BACKUP_ARCHIVE"
+		exit 13
+	fi
+	RESTORE_ROOT="$BACKUP_STAGING"
+	if [[ ! -d "$RESTORE_ROOT/easyrsa3" && ! -d "$RESTORE_ROOT/openvpn-ccd" && ! -d "$RESTORE_ROOT/wireguard" && ! -d "$RESTORE_ROOT/config" && ! -d "$RESTORE_ROOT/knot-resolver" && ! -d "$RESTORE_ROOT/custom" ]]; then
+		rm -rf -- "$BACKUP_STAGING"
+		BACKUP_STAGING=
+		echo "Error: Backup archive contains no supported configuration directories: $BACKUP_ARCHIVE"
+		exit 13
+	fi
 fi
 
-tar -xzf /root/backup*.tar.gz || true
-rm -f /root/backup*.tar.gz || true
-
-cp -r /root/easyrsa3/* /tmp/antizapret/setup/etc/openvpn/easyrsa3/ || true
 mkdir -p /tmp/antizapret/setup/etc/openvpn/server/ccd /tmp/antizapret/setup/etc/openvpn/server/ccd2
-cp -a "$OPENVPN_CCD_STAGING/ccd/"* /tmp/antizapret/setup/etc/openvpn/server/ccd/ || true
-cp -a "$OPENVPN_CCD_STAGING/ccd2/"* /tmp/antizapret/setup/etc/openvpn/server/ccd2/ || true
-cp -a /root/openvpn-ccd/ccd/* /tmp/antizapret/setup/etc/openvpn/server/ccd/ || true
-cp -a /root/openvpn-ccd/ccd2/* /tmp/antizapret/setup/etc/openvpn/server/ccd2/ || true
-cp /root/wireguard/* /tmp/antizapret/setup/etc/wireguard/ || true
-cp /root/config/* /tmp/antizapret/setup/root/antizapret/config/ || true
-cp /root/knot-resolver/* /tmp/antizapret/setup/etc/knot-resolver/ || true
-cp /root/custom/* /tmp/antizapret/setup/root/antizapret/ || true
+if [[ -d "$RESTORE_ROOT/easyrsa3" ]]; then
+	cp -a "$RESTORE_ROOT/easyrsa3/." /tmp/antizapret/setup/etc/openvpn/easyrsa3/
+fi
+if [[ -d "$OPENVPN_CCD_STAGING/ccd" ]]; then
+	cp -a "$OPENVPN_CCD_STAGING/ccd/." /tmp/antizapret/setup/etc/openvpn/server/ccd/
+fi
+if [[ -d "$OPENVPN_CCD_STAGING/ccd2" ]]; then
+	cp -a "$OPENVPN_CCD_STAGING/ccd2/." /tmp/antizapret/setup/etc/openvpn/server/ccd2/
+fi
+if [[ -d "$RESTORE_ROOT/openvpn-ccd/ccd" ]]; then
+	cp -a "$RESTORE_ROOT/openvpn-ccd/ccd/." /tmp/antizapret/setup/etc/openvpn/server/ccd/
+fi
+if [[ -d "$RESTORE_ROOT/openvpn-ccd/ccd2" ]]; then
+	cp -a "$RESTORE_ROOT/openvpn-ccd/ccd2/." /tmp/antizapret/setup/etc/openvpn/server/ccd2/
+fi
+if [[ -d "$RESTORE_ROOT/wireguard" ]]; then
+	cp -a "$RESTORE_ROOT/wireguard/." /tmp/antizapret/setup/etc/wireguard/
+fi
+if [[ -d "$RESTORE_ROOT/config" ]]; then
+	cp -a "$RESTORE_ROOT/config/." /tmp/antizapret/setup/root/antizapret/config/
+fi
+if [[ -d "$RESTORE_ROOT/knot-resolver" ]]; then
+	cp -a "$RESTORE_ROOT/knot-resolver/." /tmp/antizapret/setup/etc/knot-resolver/
+fi
+if [[ -d "$RESTORE_ROOT/custom" ]]; then
+	cp -a "$RESTORE_ROOT/custom/." /tmp/antizapret/setup/root/antizapret/
+fi
 
+# Источники в /root больше не нужны после успешного копирования. Очищаем их
+# и при восстановлении из архива, иначе они могут стать неявным устаревшим
+# backup для следующего запуска без архива.
 rm -rf /root/easyrsa3
 rm -rf /root/wireguard
 rm -rf /root/config
 rm -rf /root/knot-resolver
 rm -rf /root/custom
 rm -rf /root/openvpn-ccd
+if [[ "$RESTORE_ROOT" != /root ]]; then
+	rm -rf -- "$BACKUP_STAGING"
+	BACKUP_STAGING=
+	trap - EXIT
+fi
 rm -rf "$OPENVPN_CCD_STAGING"
 
 # Сохраняем настройки
@@ -804,6 +911,7 @@ fi
 
 # Перезагружаем
 echo
+[[ -n "$BACKUP_ARCHIVE" ]] && rm -f -- "$BACKUP_ARCHIVE"
 echo -e '\e[1;32mAntiZapret VPN + full VPN installed successfully!\e[0m'
 echo 'Rebooting...'
 

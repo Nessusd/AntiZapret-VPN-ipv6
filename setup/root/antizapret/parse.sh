@@ -19,8 +19,41 @@ fi
 echo 'Parse AntiZapret VPN files:'
 
 cd /root/antizapret
-rm -rf temp result
+rm -rf temp
 mkdir -p temp result
+
+# Частичное обновление не должно удалять результаты второго класса. В частности,
+# route-ips*.txt нужны BIRD и должны переживать запуск только с параметром host.
+case "${1:-}" in
+	ip|ips)
+		rm -f \
+			result/route-ips.txt \
+			result/drop-ips.txt \
+			result/deny-ips.txt \
+			result/DEFAULT \
+			result/tp-link-openvpn-routes.txt \
+			result/keenetic-wireguard-routes.txt \
+			result/mikrotik-wireguard-routes.txt \
+			result/ips \
+			result/forward-ips.txt \
+			result/allow-ips.txt
+		;;
+	host|hosts)
+		rm -f \
+			result/include-adblock-hosts.txt \
+			result/exclude-adblock-hosts.txt \
+			result/deny.rpz \
+			result/deny2.rpz \
+			result/include-hosts.txt \
+			result/exclude-hosts.txt \
+			result/proxy.rpz
+		;;
+	*)
+		# Полный запуск сохраняет прежнее поведение: результат строится с нуля.
+		rm -rf result
+		mkdir -p result
+		;;
+esac
 source setup
 
 for file in config/*.txt; do
