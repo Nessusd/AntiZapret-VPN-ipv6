@@ -1,130 +1,192 @@
 # AntiZapret VPN IPv6
 
-Этот репозиторий — форк
-[AntiZapret-VPN](https://github.com/GubernievS/AntiZapret-VPN). Его основная
-задача — добавить нормальную поддержку IPv6 и при этом сохранить привычную
-работу проекта по IPv4.
+Форк [AntiZapret-VPN](https://github.com/GubernievS/AntiZapret-VPN) с упором на
+dual-stack.
 
-## Текущее состояние
+Задача простая: добавить IPv6 и не разломать штатный IPv4. Если IPv6 выключен,
+новая логика в старую схему не лезет.
 
-IPv6 уже работает в OpenVPN, WireGuard и AmneziaWG. Клиент получает адреса обоих
-стеков, домены с AAAA-записями направляются через AntiZapret, а для полного VPN
-добавлена маршрутизация всего IPv6-трафика. На сервере используются отдельные
-правила `ip6tables`, наборы `ipset` и NAT66.
+## Что уже едет
 
-Списки IPv6 хранятся рядом с обычными IPv4-списками в файлах `*-ips6.txt` и
-обновляются тем же системным таймером. Сейчас опубликованы списки Cloudflare,
-Amazon, Google, Telegram, Hetzner, DigitalOcean, OVH, Meta/WhatsApp, Roblox и
-Akamai. Для Discord подходящего надёжного источника IPv6-префиксов пока нет.
+- OpenVPN, WireGuard и AmneziaWG работают в IPv4+IPv6.
+- AAAA для доменов AntiZapret уходит через туннель.
+- Full VPN получает IPv6 default route.
+- На сервере подняты отдельные `ip6tables`, IPv6-наборы `ipset` и NAT66.
+- Старые адреса, ключи и IPv4-профили сохраняются при миграции.
+- После setup и восстановления из backup приватные каталоги EasyRSA и
+  `/etc/wireguard` зажимаются: каталогам `0700`, файлам `0600`.
+- IPv6 можно полностью выключить через setup.
+- BGP включается отдельно и по умолчанию не ставится.
+- WARP можно включить отдельно для AntiZapret VPN и full VPN.
 
-Существующие конфигурации OpenVPN и WireGuard переводятся в режим IPv4+IPv6 без
-смены IPv4-адресов и ключей. Если IPv6 не нужен, его можно отключить при
-установке — старый IPv4-режим останется прежним. Обратная совместимость с
-оригинальным проектом считается обязательной для всех дальнейших изменений.
+IPv6-списки лежат рядом с IPv4:
 
-Для клиентских маршрутизаторов добавлена необязательная передача списков по BGP.
-Она работает через отдельный экземпляр BIRD 2, не импортирует маршруты от
-клиентов и не записывает свои таблицы в FIB сервера. По умолчанию BGP выключен,
-а все старые и новые клиенты продолжают получать статические маршруты.
+```text
+setup/root/antizapret/download/
+├── cloudflare-ips.txt
+├── cloudflare-ips6.txt
+├── telegram-ips.txt
+├── telegram-ips6.txt
+└── ...
+```
 
-## Известные ограничения
+Сейчас есть IPv6-списки для Cloudflare, Amazon, Google, Telegram, Hetzner,
+DigitalOcean, OVH, Meta/WhatsApp, Roblox и Akamai.
 
-MikroTik RouterOS 7.19.6 получает IPv6-адрес OpenVPN-туннеля, но сохраняет только
-последний из нескольких параметров `route-ipv6`. Поэтому служебный маршрут для
-доменов работает, а передать таким способом весь список IPv6-сетей нельзя.
-Большой набор параметров также может вызвать сообщение
-`received OVPN option length exceeds limit` и повторное подключение.
+Fastly не используется. Для Discord нормального источника IPv6-префиксов пока
+нет.
 
-OpenVPN-клиенту, работающему как маршрутизатор, можно назначить отдельный
-глобальный префикс от `/48` до `/64`. Этот режим ещё проверен не во всех
-вариантах; автоматическая установка серверного маршрута сейчас зависит от
-OpenVPN DCO.
+## WARP
 
-BGP на стороне клиента автоматически не настраивается. Команды ниже проверены
-на RouterOS 7.19.6 и 7.23.1, но работу маршрутизации на конкретном роутере всё равно
-нужно проверить отдельно.
+WARP регистрируется при старте сервиса. Отдельно можно завернуть:
 
-Для выхода клиентов в IPv6-интернет серверу нужен собственный глобальный
-IPv6-адрес и маршрут по умолчанию. Внутреннего ULA-адреса туннеля для этого
-недостаточно.
+- `antizapret-*`;
+- `vpn-*`.
+
+Если WARP не поднялся, трафик уходит через обычный uplink сервера. Fail-closed
+тут нет.
+
+Если dual-stack WARP не стартовал, выполняется повторная попытка только с IPv4.
+Рабочий IPv4 из-за проблем WARP IPv6 не режется.
+
+## BGP
+
+BGP нужен роутерам, которым неудобно принимать жирный список статических
+маршрутов.
+
+Под капотом отдельный BIRD 2:
+
+- слушает TCP/179 только из VPN-сетей;
+- отдаёт IPv4 и IPv6 одним пиром;
+- ничего не принимает от клиентов;
+- свои таблицы в FIB сервера не льёт;
+- обычных клиентов не трогает.
+
+При ответе `n` установщик не ставит BIRD, не создаёт unit и не открывает
+TCP/179.
+
+Режим клиента:
+
+- `static` — штатная раздача маршрутов;
+- `bgp` — маршруты забирает BGP-демон клиента.
+
+Все клиенты могут использовать ASN `4200000291`. Сервер разводит их по tunnel
+IP. `router-id` должен быть уникальным.
+
+Серверные адреса:
+
+| Транспорт | BGP peer |
+|---|---|
+| OpenVPN UDP | `10.29.0.1` |
+| OpenVPN TCP | `10.29.4.1` |
+| WireGuard | `10.29.8.1` |
+
+При альтернативной сетке `10` меняется на `172`.
+
+## Известные грабли
+
+### RouterOS и OpenVPN IPv6
+
+RouterOS 7.19.6 сохраняет только последний из нескольких `route-ipv6`.
+Большой push также может закончиться сообщением:
+
+```text
+received OVPN option length exceeds limit
+```
+
+Для длинных списков используйте BGP.
+
+### Маршрутизируемый префикс клиента
+
+OpenVPN-клиенту в режиме роутера можно назначить глобальный префикс от `/48`
+до `/64`.
+
+Схема ещё не обкатана во всех комбинациях. Автоматическая установка серверного
+маршрута сейчас зависит от OpenVPN DCO.
+
+### Выход в IPv6
+
+ULA внутри туннеля не даёт интернет сам по себе. Нужны:
+
+- глобальный IPv6 и рабочий default route на uplink либо живой WARP IPv6;
+- разрешённый forwarding.
+
+## Требования
+
+- Ubuntu 24.04+ или Debian 13+;
+- отдельный сервер/VPS;
+- публичный IPv4;
+- глобальный IPv6, если IPv6 не выводится через WARP;
+- запуск от `root`.
+
+Setup правит firewall, sysctl, systemd и сетевые сервисы. Заодно сносит UFW,
+Firewalld, AppArmor и пачку лишних для VPN пакетов.
+
+На общей хозяйской машине его лучше не пускать.
 
 ## Установка
 
-Нужен отдельный сервер или VPS с Ubuntu 24.04 либо Debian 13 или новее, внешним
-IPv4-адресом, 1 ГБ памяти и примерно 10 ГБ свободного места. Для полноценного
-IPv6 потребуется также глобальный IPv6-адрес.
-
-Установка и обновление выполняются от `root`:
-
 ```sh
-bash <(wget -qO- --no-hsts --inet4-only \
-  https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup.sh)
+bash <(wget -qO- --no-hsts --inet4-only https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup.sh)
 ```
 
-Чтобы включить IPv6, оставьте `n` в ответе на вопрос
-`Disable IPv6 on this server?`.
+Для IPv6 оставить:
 
-Вопрос `Enable private BGP route delivery for router clients?` включает BIRD и
-серверную передачу маршрутов. Ответ `n` не устанавливает BIRD, не создаёт BGP-
-службу и не открывает TCP/179. При включении установщик предлагает частные ASN;
-по умолчанию используются `4200000290` на сервере и `4200000291` на клиентах.
+```text
+Disable IPv6 on this server? [y/n]: n
+```
 
-Установщик меняет сетевые настройки и правила межсетевого экрана, а также
-удаляет UFW, Firewalld, AppArmor и ряд ненужных для VPN пакетов. Его лучше
-запускать на отдельной машине, предварительно просмотрев `setup.sh` и сделав
-резервную копию.
+Для BGP:
 
-Перед повторной установкой можно создать встроенную резервную копию:
+```text
+Enable private BGP route delivery for router clients? [y/n]: y
+```
+
+ASN по умолчанию:
+
+```text
+server: 4200000290
+client: 4200000291
+```
+
+Перед повторной установкой можно снять backup:
 
 ```sh
 /root/antizapret/client.sh 8
 ```
 
-## После установки
+Архив проверяется до публикации, кладётся атомарно и получает режим `0600`.
 
-Клиентами управляет команда:
+## Клиенты
+
+Меню:
 
 ```sh
 /root/antizapret/client.sh
 ```
 
-Если BGP включён глобально, при создании клиента можно выбрать режим `static`
-или `bgp`. Первый режим полностью повторяет прежнее поведение. Во втором
-OpenVPN не получает большой набор маршрутов через CCD, а профиль WireGuard
-использует `AllowedIPs = 0.0.0.0/0, ::/0` и `Table = off`; маршруты в системе
-клиента должен устанавливать его BGP-демон.
+Профили:
 
-BGP-соседство устанавливается по IPv4 внутри туннеля: сервер слушает
-`10.29.0.1` для OpenVPN UDP, `10.29.4.1` для OpenVPN TCP и `10.29.8.1` для
-WireGuard. При альтернативном диапазоне первый октет меняется на `172`.
-TCP/179 с публичного интерфейса закрыт. Сервер передаёт IPv4 и IPv6 одним
-сеансом, не принимает клиентские маршруты и помечает анонсы large community
-`(ASN сервера, 29, 4)` или `(ASN сервера, 29, 6)`.
+```text
+/root/antizapret/client/openvpn/
+/root/antizapret/client/wireguard/
+/root/antizapret/client/amneziawg/
+```
 
-На клиентском маршрутизаторе нужно создать исходящий eBGP-сеанс к
-соответствующему адресу сервера, указать клиентский ASN как local AS, серверный
-ASN как remote AS и включить IPv4/IPv6 AFI. Экспорт в сторону сервера следует
-запретить, а на импорт поставить фильтр и ограничение числа префиксов.
+## RouterOS 7
 
-### RouterOS 7
+Команды проверены на RouterOS 7.19.6 и 7.23.1. Поменять под свой роутер:
 
-В командах ниже нужно изменить:
+- `10.29.0.2` — tunnel IP клиента и его `router-id`;
+- `10.29.0.1` — BGP peer сервера;
+- `4200000290` — ASN сервера;
+- `4200000291` — ASN клиента;
+- `main` — таблица маршрутизации.
 
-- `10.29.0.2` — адрес самого роутера в VPN; он же используется как
-  его уникальный `router-id`;
-- `10.29.0.1` — адрес сервера: `10.29.0.1` для OpenVPN UDP,
-  `10.29.4.1` для OpenVPN TCP и `10.29.8.1` для WireGuard; при
-  альтернативном диапазоне `10` заменяется на `172`;
-- `4200000290` и `4200000291` — ASN сервера и клиента, если при установке
-  выбирались другие;
-- `main` — таблица, куда будут помещены маршруты. Для policy routing её можно
-  заменить на заранее созданную таблицу.
+Для OpenVPN TCP peer сервера — `10.29.4.1`, для WireGuard — `10.29.8.1`.
+При альтернативной сетке `10` меняется на `172`.
 
-Все клиенты могут использовать один ASN `4200000291`: сервер различает их по
-уникальным адресам в туннеле. `router-id` у них также должен различаться.
-
-Общие для всех RouterOS 7 фильтры принимают только анонсы AntiZapret нужного
-стека. Обратный экспорт полностью запрещён:
+Фильтры:
 
 ```routeros
 /routing/filter/rule
@@ -134,14 +196,14 @@ add chain=antizapret-bgp-in rule="reject;"
 add chain=antizapret-bgp-out rule="reject;"
 ```
 
-Для RouterOS 7.19 соединение создаётся так:
+RouterOS 7.19:
 
 ```routeros
 /routing/bgp/connection
 add name=antizapret-bgp as=4200000291 router-id=10.29.0.2 local.address=10.29.0.2 local.role=ebgp remote.address=10.29.0.1/32 remote.as=4200000290 afi=ip,ipv6 routing-table=main connect=yes listen=no input.filter=antizapret-bgp-in input.limit-process-routes-ipv4=10000 input.limit-process-routes-ipv6=10000 output.filter-chain=antizapret-bgp-out
 ```
 
-На RouterOS 7.20 и новее сначала нужно создать отдельный BGP instance:
+RouterOS 7.20+:
 
 ```routeros
 /routing/bgp/instance
@@ -151,7 +213,7 @@ add name=antizapret-bgp as=4200000291 router-id=10.29.0.2
 add name=antizapret-bgp instance=antizapret-bgp local.address=10.29.0.2 local.role=ebgp remote.address=10.29.0.1/32 remote.as=4200000290 afi=ip,ipv6 routing-table=main connect=yes listen=no input.filter=antizapret-bgp-in input.limit-process-routes-ipv4=10000 input.limit-process-routes-ipv6=10000 output.filter-chain=antizapret-bgp-out
 ```
 
-Состояние сеанса и принятые маршруты проверяются командами:
+Проверка:
 
 ```routeros
 /routing/bgp/session/print detail where name~"antizapret-bgp"
@@ -159,8 +221,8 @@ add name=antizapret-bgp instance=antizapret-bgp local.address=10.29.0.2 local.ro
 /ipv6/route/print count-only where protocol=bgp
 ```
 
-Повторно эти команды выполнять нельзя: они создают новые записи. Для пересоздания
-сначала удалите только объекты AntiZapret:
+Повторный импорт создаст дубли. Перед пересборкой удалить только объекты
+AntiZapret:
 
 ```routeros
 /routing/bgp/connection/remove [find where name="antizapret-bgp"]
@@ -169,43 +231,96 @@ add name=antizapret-bgp instance=antizapret-bgp local.address=10.29.0.2 local.ro
 /routing/filter/rule/remove [find where chain="antizapret-bgp-out"]
 ```
 
-Готовые профили находятся в каталогах:
+## Апдейты
 
-```text
-/root/antizapret/client/openvpn/
-/root/antizapret/client/wireguard/
-/root/antizapret/client/amneziawg/
-```
+Планировщик запускается ежедневно в `02:00` с рандомной задержкой до двух
+часов.
 
-Списки обновляются каждый день между 02:00 и 04:00 по времени сервера. Запустить
-обновление вручную можно так:
+Ручной прогон:
 
 ```sh
 /root/antizapret/doall.sh
 ```
 
-Отчёты обновления и BGP пишутся в системный журнал:
+Только адреса:
 
 ```sh
-journalctl -u antizapret-update.service -u antizapret-bgp.service
+/root/antizapret/doall.sh ip
 ```
 
-Журнал ограничен 256 МБ и хранится не дольше 14 дней. Если при установке
-включены подробные логи OpenVPN, они проверяются на ротацию каждый час:
-файл ротируется после 8 МБ, хранится до 12 архивов и не старше 14 дней.
-При включённых OpenVPN TCP и защите от атак TLS-сканеры, отправляющие HTTPS
-ClientHello, блокируются на 24 часа. Правила создаются только для TCP-портов,
-указанных в серверной конфигурации OpenVPN.
+Только домены:
 
-Свои домены добавляются в `/root/antizapret/config/include-hosts.txt`, а сети
-IPv4 и IPv6 — в `/root/antizapret/config/include-ips.txt`. Для исключений рядом
-лежат `exclude-hosts.txt` и `exclude-ips.txt`. После изменения этих файлов нужно
-снова выполнить `doall.sh`.
+```sh
+/root/antizapret/doall.sh host
+```
 
-## Происхождение проекта
+Частичный прогон не сносит результаты второго типа. IPv6/BGP runtime скачивается
+одним срезом commit SHA. Битый или неполный набор не публикуется, старый остаётся
+на месте.
 
-Установщик, IPv4-маршрутизация и основная логика взяты из
+## Логи
+
+```sh
+journalctl -u antizapret-update.service
+journalctl -u antizapret-bgp.service
+```
+
+BIRD:
+
+```sh
+birdc -s /run/antizapret-bgp/bird.ctl show status
+birdc -s /run/antizapret-bgp/bird.ctl show protocols
+```
+
+Journald:
+
+- лимит `256M`;
+- хранение до `14 дней`.
+
+Для подробных OpenVPN-логов:
+
+- ротация после `8M`;
+- до `12` архивов;
+- не старше `14 дней`.
+
+Если включены защита от атак и OpenVPN TCP, TLS-сканеры банятся на 24 часа.
+Правила цепляются только к реально настроенным OpenVPN TCP-портам.
+
+## Свои списки
+
+Домены:
+
+```text
+/root/antizapret/config/include-hosts.txt
+/root/antizapret/config/exclude-hosts.txt
+```
+
+Сети IPv4 и IPv6:
+
+```text
+/root/antizapret/config/include-ips.txt
+/root/antizapret/config/exclude-ips.txt
+```
+
+После правки:
+
+```sh
+/root/antizapret/doall.sh
+```
+
+## Ближайшие задачи
+
+1. Убрать зависимость routed prefix от DCO.
+2. Догнать матрицу RouterOS/OpenVPN.
+3. Добавлять Discord IPv6 только после появления вменяемого источника.
+4. Не ломать IPv4 при дальнейшей раскатке IPv6 и BGP.
+
+## Откуда ноги
+
+Основной setup, IPv4-маршрутизация и базовая логика взяты из
 [GubernievS/AntiZapret-VPN](https://github.com/GubernievS/AntiZapret-VPN).
-Оригинальный проект основан на разработках
+
+Оригинальная схема основана на разработках
 [ValdikSS](https://bitbucket.org/anticensority/antizapret-vpn-container/src/master).
-Изменения этого форка, связанные с IPv6, разрабатываются и тестируются отдельно.
+
+Этот форк пилит IPv6, BGP и совместимость поверх исходного проекта.

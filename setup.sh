@@ -6,6 +6,39 @@
 #
 export LC_ALL=C
 
+set_vpn_key_permissions() {
+	local easyrsa_dir=$1
+	local wireguard_dir=$2
+	local private_dir
+
+	for private_dir in \
+		"$easyrsa_dir/pki/private" \
+		"$easyrsa_dir/pki/inline" \
+		"$easyrsa_dir/pki/renewed/private" \
+		"$easyrsa_dir/pki/renewed/private_by_serial" \
+		"$easyrsa_dir/pki/revoked/private" \
+		"$easyrsa_dir/pki/revoked/private_by_serial"
+	do
+		[[ -d "$private_dir" ]] || continue
+		find "$private_dir" -type d -exec chmod 700 {} + || return 1
+		find "$private_dir" -type f -exec chmod 600 {} + || return 1
+	done
+	if [[ -d "$easyrsa_dir/pki" ]]; then
+		find "$easyrsa_dir/pki" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
+	fi
+	if [[ -d "$wireguard_dir" ]]; then
+		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
+		find "$wireguard_dir" -type f -exec chmod 600 {} + || return 1
+	fi
+}
+
+require_vpn_key_permissions() {
+	if ! set_vpn_key_permissions "$1" "$2"; then
+		echo "Error: Cannot secure VPN private keys under $1 or $2"
+		exit 15
+	fi
+}
+
 # Проверка необходимости перезагрузить
 if [[ -f /var/run/reboot-required ]] || pidof apt apt-get dpkg unattended-upgrades &>/dev/null; then
 	echo 'Error: You need to reboot this server before installation!'
@@ -433,6 +466,7 @@ systemctl disable --now wg-quick@vpn
 if [[ "$BGP_ENABLE" == 'y' || "$MANAGED_BGP_PRESENT" == 'y' ]]; then
 	systemctl disable --now antizapret-bgp || true
 fi
+require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 # Удалим ненужные службы
 apt-get purge -y ufw
@@ -628,6 +662,7 @@ if [[ -n "$BACKUP_ARCHIVE" ]]; then
 fi
 
 mkdir -p /tmp/antizapret/setup/etc/openvpn/server/ccd /tmp/antizapret/setup/etc/openvpn/server/ccd2
+require_vpn_key_permissions "$RESTORE_ROOT/easyrsa3" "$RESTORE_ROOT/wireguard"
 if [[ -d "$RESTORE_ROOT/easyrsa3" ]]; then
 	cp -a "$RESTORE_ROOT/easyrsa3/." /tmp/antizapret/setup/etc/openvpn/easyrsa3/
 fi
@@ -655,6 +690,9 @@ fi
 if [[ -d "$RESTORE_ROOT/custom" ]]; then
 	cp -a "$RESTORE_ROOT/custom/." /tmp/antizapret/setup/root/antizapret/
 fi
+require_vpn_key_permissions \
+	/tmp/antizapret/setup/etc/openvpn/easyrsa3 \
+	/tmp/antizapret/setup/etc/wireguard
 
 # Источники в /root больше не нужны после успешного копирования. Очищаем их
 # и при восстановлении из архива, иначе они могут стать неявным устаревшим
@@ -734,8 +772,26 @@ mkdir -p /var/cache/knot-resolver
 mkdir -p /var/cache/knot-resolver2
 
 # Выставляем разрешения
-find /tmp/antizapret -type f -exec chmod 644 {} +
-find /tmp/antizapret -type d -exec chmod 755 {} +
+find /tmp/antizapret \
+	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/inline -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/revoked/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/revoked/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/wireguard \) -prune -o \
+	-type f -exec chmod 644 {} +
+find /tmp/antizapret \
+	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/inline -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/revoked/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/revoked/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/wireguard \) -prune -o \
+	-type d -exec chmod 755 {} +
 find /tmp/antizapret/setup/root/antizapret -type f -exec chmod +x {} +
 find /tmp/antizapret/setup/etc/openvpn/server/scripts -type f -exec chmod +x {} +
 chown -R knot-resolver:knot-resolver /var/cache/knot-resolver
@@ -744,6 +800,7 @@ chown -R knot-resolver:knot-resolver /var/cache/knot-resolver2
 # Копируем нужное, удаляем не нужное
 rm -rf /root/antizapret
 cp -r /tmp/antizapret/setup/* /
+require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 rm -rf /tmp/dnslib
 rm -rf /tmp/antizapret
 
@@ -854,6 +911,7 @@ sed -i '/function policy\.PASS(state, _)/,/^end$/s/return state/return nil/' /us
 # Пересоздаем для всех существующих пользователей файлы подключений
 # Если пользователей нет, то создаем новых пользователей 'antizapret-client' для OpenVPN и WireGuard/AmneziaWG
 /root/antizapret/client.sh 7
+require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 # Включим обновляемые службы
 systemctl enable kresd@1

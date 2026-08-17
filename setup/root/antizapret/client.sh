@@ -55,6 +55,39 @@ WIREGUARD_IPV6_HELPER="${WIREGUARD_IPV6_HELPER:-/root/antizapret/wireguard-ipv6.
 OPENVPN_IPV6_HELPER="${OPENVPN_IPV6_HELPER:-/root/antizapret/openvpn-ipv6.py}"
 OPENVPN_LISTS_HELPER="${OPENVPN_LISTS_HELPER:-/root/antizapret/firewall6-lists.py}"
 
+set_vpn_key_permissions() {
+	local easyrsa_dir=$1
+	local wireguard_dir=$2
+	local private_dir
+
+	for private_dir in \
+		"$easyrsa_dir/pki/private" \
+		"$easyrsa_dir/pki/inline" \
+		"$easyrsa_dir/pki/renewed/private" \
+		"$easyrsa_dir/pki/renewed/private_by_serial" \
+		"$easyrsa_dir/pki/revoked/private" \
+		"$easyrsa_dir/pki/revoked/private_by_serial"
+	do
+		[[ -d "$private_dir" ]] || continue
+		find "$private_dir" -type d -exec chmod 700 {} + || return 1
+		find "$private_dir" -type f -exec chmod 600 {} + || return 1
+	done
+	if [[ -d "$easyrsa_dir/pki" ]]; then
+		find "$easyrsa_dir/pki" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
+	fi
+	if [[ -d "$wireguard_dir" ]]; then
+		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
+		find "$wireguard_dir" -type f -exec chmod 600 {} + || return 1
+	fi
+}
+
+require_vpn_key_permissions() {
+	if ! set_vpn_key_permissions "$1" "$2"; then
+		echo "Cannot secure VPN private keys under $1 or $2"
+		exit 13
+	fi
+}
+
 askClientName(){
 	if ! [[ "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]{1,32}$ ]]; then
 		echo
@@ -327,6 +360,7 @@ initOpenVPN(){
 
 	EASYRSA_CRL_DAYS=3650 /usr/share/easy-rsa/easyrsa gen-crl
 	chmod 644 /etc/openvpn/easyrsa3/pki/crl.pem
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 }
 
 addOpenVPN(){
@@ -420,6 +454,7 @@ PUBLIC_KEY=${PUBLIC_KEY}" > /etc/wireguard/key
 		render "/etc/wireguard/templates/vpn.conf" > "/etc/wireguard/vpn.conf"
 	fi
 	migrateWireGuardIPv6
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 }
 
 addWireGuard(){
@@ -595,10 +630,29 @@ recreate(){
 		initWireGuard
 		addWireGuard >/dev/null
 	fi
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
+}
+
+create_backup_archive(){
+	local backup_file=$1
+	local backup_source=$2
+	local backup_tmp
+
+	backup_tmp="$(mktemp "${backup_file}.tmp.XXXXXX")" || return 1
+	if ! (umask 077; tar -czf "$backup_tmp" -C "$backup_source" easyrsa3 openvpn-ccd wireguard config knot-resolver custom) || \
+	   ! tar -tzf "$backup_tmp" >/dev/null; then
+		rm -f -- "$backup_tmp"
+		return 1
+	fi
+	if ! chmod 600 "$backup_tmp" || ! mv -f -- "$backup_tmp" "$backup_file"; then
+		rm -f -- "$backup_tmp"
+		return 1
+	fi
 }
 
 backup(){
 	echo
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 	rm -rf /root/antizapret/backup
 	mkdir -p /root/antizapret/backup/wireguard
@@ -608,19 +662,22 @@ backup(){
 	mkdir -p /root/antizapret/backup/openvpn-ccd/ccd
 	mkdir -p /root/antizapret/backup/openvpn-ccd/ccd2
 
-	cp -r /etc/openvpn/easyrsa3 /root/antizapret/backup
+	cp -a -- /etc/openvpn/easyrsa3 /root/antizapret/backup/
 	find /etc/openvpn/server/ccd -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t /root/antizapret/backup/openvpn-ccd/ccd -- {} +
 	find /etc/openvpn/server/ccd2 -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t /root/antizapret/backup/openvpn-ccd/ccd2 -- {} +
-	cp -r /etc/wireguard/antizapret.conf /root/antizapret/backup/wireguard
-	cp -r /etc/wireguard/vpn.conf /root/antizapret/backup/wireguard
-	cp -r /etc/wireguard/key /root/antizapret/backup/wireguard
+	cp -a -- /etc/wireguard/antizapret.conf /root/antizapret/backup/wireguard/
+	cp -a -- /etc/wireguard/vpn.conf /root/antizapret/backup/wireguard/
+	cp -a -- /etc/wireguard/key /root/antizapret/backup/wireguard/
 	cp -r /root/antizapret/config/*.txt /root/antizapret/backup/config || true
 	cp -r /etc/knot-resolver/*.lua /root/antizapret/backup/knot-resolver || true
 	cp -r /root/antizapret/custom*.sh /root/antizapret/backup/custom || true
 
 	BACKUP_FILE="/root/antizapret/backup-$SERVER_IP.tar.gz"
-	tar -czf $BACKUP_FILE -C /root/antizapret/backup easyrsa3 openvpn-ccd wireguard config knot-resolver custom
-	tar -tzf $BACKUP_FILE >/dev/null
+	if ! create_backup_archive "$BACKUP_FILE" /root/antizapret/backup; then
+		rm -rf /root/antizapret/backup
+		echo 'Cannot create a valid backup archive'
+		return 1
+	fi
 
 	rm -rf /root/antizapret/backup
 
@@ -656,6 +713,7 @@ restore(){
 		restore_root="$restore_staging"
 	fi
 
+	require_vpn_key_permissions "$restore_root/easyrsa3" "$restore_root/wireguard"
 	if [[ ! -d "$restore_root/easyrsa3" && ! -d "$restore_root/openvpn-ccd" && ! -d "$restore_root/wireguard" && ! -d "$restore_root/config" && ! -d "$restore_root/knot-resolver" && ! -d "$restore_root/custom" ]]; then
 		if [[ -n "$restore_staging" ]]; then
 			rm -rf -- "$restore_staging"
@@ -691,6 +749,7 @@ restore(){
 	if [[ -d "$restore_root/custom" ]]; then
 		cp -a "$restore_root/custom/." /root/antizapret/
 	fi
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 	# После успешного копирования удаляем и заранее распакованные источники.
 	# Иначе следующий запуск без архива может принять их за актуальный backup.
