@@ -15,6 +15,27 @@ handle_error() {
 }
 trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
+cleanup() {
+	rm -f -- /usr/local/src/openvpn.tar.gz
+}
+trap cleanup EXIT
+
+OPENVPN_SERVER_UNITS=(
+	openvpn-server@antizapret-udp.service
+	openvpn-server@vpn-udp.service
+	openvpn-server@antizapret-tcp.service
+	openvpn-server@vpn-tcp.service
+)
+
+restart_managed_openvpn() {
+	local unit
+	for unit in "${OPENVPN_SERVER_UNITS[@]}"; do
+		if systemctl is-active --quiet "$unit"; then
+			systemctl restart "$unit"
+		fi
+	done
+}
+
 if [[ "$1" =~ ^[0-2]$ ]]; then
 	ALGORITHM="$1"
 else
@@ -33,14 +54,16 @@ export DEBIAN_FRONTEND=noninteractive
 if [[ "$ALGORITHM" == '0' ]]; then
 	if [[ -d /usr/local/src/openvpn ]]; then
 		make -C /usr/local/src/openvpn uninstall || true
+		rm -f /usr/local/lib/tmpfiles.d/openvpn.conf /usr/local/lib/tmpfiles.d/tmpfiles-openvpn.conf
 		rm -rf /usr/local/src/openvpn
-		apt-get update
-		apt-get dist-upgrade -y
-		apt-get install -y openvpn
-		apt-get autoremove --purge -y
-		apt-get clean
+		if [[ "${ANTIZAPRET_SETUP_RUN:-n}" != 'y' ]]; then
+			apt-get update
+			apt-get dist-upgrade -y
+			apt-get install -y openvpn
+			apt-get clean
+		fi
 		systemctl daemon-reload
-		systemctl restart openvpn-server@*
+		restart_managed_openvpn
 		echo
 		echo 'OpenVPN patch remove successfully!'
 		exit 0
@@ -55,19 +78,29 @@ else
 fi
 
 make -C /usr/local/src/openvpn uninstall || true
+rm -f /usr/local/lib/tmpfiles.d/openvpn.conf /usr/local/lib/tmpfiles.d/tmpfiles-openvpn.conf
 rm -rf /usr/local/src/openvpn
-apt-get update
-apt-get dist-upgrade -y
-apt-get install -y openvpn curl tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev
-apt-get autoremove --purge -y
-apt-get clean
+if [[ "${ANTIZAPRET_SETUP_RUN:-n}" != 'y' ]]; then
+	apt-get update
+	apt-get dist-upgrade -y
+	apt-get install -y openvpn curl tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev
+	apt-get clean
+fi
 VERSION="$(openvpn --version | head -n 1 | awk '{print $2}')"
 mkdir -p /usr/local/src/openvpn
 curl -fL --connect-timeout 30 https://build.openvpn.net/downloads/releases/openvpn-$VERSION.tar.gz -o /usr/local/src/openvpn.tar.gz || curl -fL --connect-timeout 30 https://github.com/OpenVPN/openvpn/releases/download/v$VERSION/openvpn-$VERSION.tar.gz -o /usr/local/src/openvpn.tar.gz
 tar --strip-components=1 -xvzf /usr/local/src/openvpn.tar.gz -C /usr/local/src/openvpn
 rm -f /usr/local/src/openvpn.tar.gz
 
+SOCKET_HEADER=/usr/local/src/openvpn/src/openvpn/socket.h
+PATCH_TARGET_COUNT="$(grep -Fc 'link_socket_write_udp(struct link_socket *sock,' "$SOCKET_HEADER" || true)"
+if [[ "$PATCH_TARGET_COUNT" != 1 ]]; then
+	echo "OpenVPN source layout is unsupported: found $PATCH_TARGET_COUNT UDP write targets"
+	exit 3
+fi
+
 sed -i '/link_socket_write_udp(struct link_socket \*sock/,/^$/c\
+/* AntiZapret OpenVPN UDP patch */\
 link_socket_write_udp(struct link_socket *sock,\
 					struct buffer *buf,\
 					struct link_socket_actual *to)\
@@ -130,7 +163,14 @@ link_socket_write_udp(struct link_socket *sock,\
 #endif\
 	return buffer_sent;\
 }\
-' /usr/local/src/openvpn/src/openvpn/socket.h
+' "$SOCKET_HEADER"
+
+if [[ "$(grep -Fc '/* AntiZapret OpenVPN UDP patch */' "$SOCKET_HEADER" || true)" != 1 ]] || \
+	[[ "$(grep -Fc 'link_socket_write_udp(struct link_socket *sock,' "$SOCKET_HEADER" || true)" != 1 ]]
+then
+	echo 'OpenVPN UDP patch verification failed'
+	exit 3
+fi
 
 (
 	cd /usr/local/src/openvpn
@@ -161,7 +201,7 @@ link_socket_write_udp(struct link_socket *sock,\
 	make install
 )
 systemctl daemon-reload
-systemctl restart openvpn-server@*
+restart_managed_openvpn
 echo
 echo 'OpenVPN patch installed successfully!'
 exit 0

@@ -39,6 +39,940 @@ require_vpn_key_permissions() {
 	fi
 }
 
+# Snapshot managed configuration and unit state before the maintenance window.
+# A fatal install error restores that snapshot and restarts the old stack.
+INSTALL_TRANSACTION_ROOT=
+INSTALL_TRANSACTION_COMMITTED=n
+INSTALL_TRANSACTION_STARTED=n
+INSTALL_TRANSACTION_LATE_SNAPSHOT=n
+INSTALL_TRANSACTION_MAINTENANCE_STOPPED=n
+INSTALL_LOCK_PATH=/run/antizapret-setup.lock
+INSTALL_LOCK_FD=
+INSTALL_CUSTOM_HOOK_MARKER=/run/antizapret-setup.defer-custom-hooks
+INSTALL_CUSTOM_HOOK_ENV=/run/antizapret-setup.custom-hook.env
+INSTALL_CUSTOM_HOOK_LOCK=/run/antizapret-setup.custom-hook.lock
+INSTALL_CUSTOM_HOOK_LOCK_FD=
+INSTALL_ROLLBACK_GUARD_COMMENT_PREFIX=antizapret-install-rollback-vpn-guard
+INSTALL_ROLLBACK_GUARD_COMMENT=
+INSTALL_ROLLBACK_SETUP_FILE=/root/antizapret/setup
+INSTALL_ROLLBACK_GUARD_REQUIRED=n
+INSTALL_ROLLBACK_TCP4_PORTS=
+INSTALL_ROLLBACK_UDP4_PORTS=
+INSTALL_ROLLBACK_TCP6_PORTS=
+INSTALL_ROLLBACK_UDP6_PORTS=
+INSTALL_TRANSACTION_PATHS=(
+	/root/easyrsa3
+	/root/wireguard
+	/root/config
+	/root/knot-resolver
+	/root/custom
+	/root/openvpn-ccd
+	/root/antizapret
+	/etc/openvpn
+	/etc/wireguard
+	/etc/knot-resolver
+	/etc/apt/sources.list.d/cznic-labs-knot-resolver.list
+	/etc/apt/sources.list.d/openvpn-aptrepo.list
+	/etc/apt/sources.list.d/backports.list
+	/etc/apt/keyrings/cznic-labs-pkg.gpg
+	/etc/apt/keyrings/openvpn-repo-public.gpg
+	/etc/apt/apt.conf.d/20auto-upgrades
+	/etc/apt/apt.conf.d/50unattended-upgrades
+	/etc/sysctl.conf
+	/etc/sysctl.d/99-disable-ipv6.conf
+	/etc/sysctl.d/99-proxy-ipv6.conf
+	/etc/sysctl.d/99-antizapret-ipv6.conf
+	/etc/sysctl.d/99-antizapret.conf
+	/etc/modules-load.d/nf_conntrack.conf
+	/etc/logrotate.d/antizapret-openvpn
+	/etc/antizapret-bgp
+	/var/lib/antizapret-bgp
+	/etc/systemd/system/antizapret-bgp.service
+	/etc/systemd/system/antizapret-update.service
+	/etc/systemd/system/antizapret-update.timer
+	/etc/systemd/system/antizapret.service
+	/etc/systemd/system/antizapret.service.d
+	/etc/systemd/system/logrotate.timer.d/antizapret.conf
+	/etc/systemd/system/kresd@.service.d
+	/etc/systemd/system/openvpn-server@.service.d
+	/etc/systemd/system/wg-quick@.service.d
+	/etc/systemd/journald.conf.d/zz-antizapret.conf
+	/usr/local/src/openvpn
+	/usr/local/src/openvpn.tar.gz
+	/usr/local/sbin/openvpn
+	/usr/local/lib/systemd/system/openvpn-client@.service
+	/usr/local/lib/systemd/system/openvpn-server@.service
+	/usr/local/lib/tmpfiles.d/openvpn.conf
+	/usr/local/lib/tmpfiles.d/tmpfiles-openvpn.conf
+	/usr/local/libexec/openvpn
+	/usr/local/include/openvpn-msg.h
+	/usr/local/include/openvpn-plugin.h
+	/usr/local/lib/openvpn
+	/usr/local/share/doc/openvpn
+	/usr/local/share/man/man5/openvpn-examples.5
+	/usr/local/share/man/man8/openvpn.8
+)
+INSTALL_TRANSACTION_LATE_PATHS=(
+	/usr/lib/knot-resolver/kres_modules/fallback.lua
+	/usr/lib/knot-resolver/kres_modules/policy.lua
+)
+INSTALL_TRANSACTION_UNITS=(
+	kresd.target
+	kres-cache-gc.service
+	kresd@1.service
+	kresd@2.service
+	antizapret.service
+	antizapret-update.timer
+	antizapret-update.service
+	unattended-upgrades.service
+	apt-daily.timer
+	apt-daily-upgrade.timer
+	apt-daily.service
+	apt-daily-upgrade.service
+	logrotate.timer
+	logrotate.service
+	openvpn-server@antizapret-udp.service
+	openvpn-server@vpn-udp.service
+	openvpn-server@antizapret-tcp.service
+	openvpn-server@vpn-tcp.service
+	wg-quick@antizapret.service
+	wg-quick@vpn.service
+	antizapret-bgp.service
+)
+INSTALL_STOP_UNITS=(
+	apt-daily.timer
+	apt-daily-upgrade.timer
+	logrotate.timer
+	antizapret-update.timer
+	unattended-upgrades.service
+	apt-daily.service
+	apt-daily-upgrade.service
+	logrotate.service
+	antizapret-update.service
+	antizapret-bgp.service
+	antizapret.service
+	openvpn-server@antizapret-udp.service
+	openvpn-server@vpn-udp.service
+	openvpn-server@antizapret-tcp.service
+	openvpn-server@vpn-tcp.service
+	wg-quick@antizapret.service
+	wg-quick@vpn.service
+	kresd.target
+	kres-cache-gc.service
+	kresd@1.service
+	kresd@2.service
+)
+INSTALL_MAINTENANCE_STOP_UNITS=(
+	apt-daily.timer
+	apt-daily-upgrade.timer
+	logrotate.timer
+	antizapret-update.timer
+	apt-daily.service
+	apt-daily-upgrade.service
+	logrotate.service
+	unattended-upgrades.service
+	antizapret-update.service
+	antizapret-bgp.service
+)
+INSTALL_START_UNITS=(
+	kresd.target
+	kresd@1.service
+	kresd@2.service
+	kres-cache-gc.service
+	openvpn-server@antizapret-udp.service
+	openvpn-server@vpn-udp.service
+	openvpn-server@antizapret-tcp.service
+	openvpn-server@vpn-tcp.service
+	wg-quick@antizapret.service
+	wg-quick@vpn.service
+	antizapret.service
+	antizapret-bgp.service
+	antizapret-update.timer
+	antizapret-update.service
+	logrotate.timer
+	apt-daily.timer
+	apt-daily-upgrade.timer
+	apt-daily.service
+	apt-daily-upgrade.service
+	logrotate.service
+	unattended-upgrades.service
+)
+declare -A INSTALL_TRANSACTION_ACTIVE=()
+declare -A INSTALL_TRANSACTION_ENABLED=()
+declare -A INSTALL_TRANSACTION_SYSCTL=()
+declare -A INSTALL_ROLLBACK_CURRENT_ACTIVE=()
+
+acquire_install_lock() {
+	local hook_state=
+
+	if ! exec {INSTALL_LOCK_FD}>> "$INSTALL_LOCK_PATH"; then
+		echo "Error: Cannot open installation lock: $INSTALL_LOCK_PATH"
+		return 1
+	fi
+	chmod 600 "$INSTALL_LOCK_PATH" || return 1
+	if ! flock -n "$INSTALL_LOCK_FD"; then
+		echo 'Error: Another AntiZapret installation is already running'
+		exec {INSTALL_LOCK_FD}>&-
+		INSTALL_LOCK_FD=
+		return 1
+	fi
+	if ! lock_install_custom_hooks; then
+		echo 'Error: Cannot lock custom hook cutover state'
+		return 1
+	fi
+	if [[ -f "$INSTALL_CUSTOM_HOOK_MARKER" ]]; then
+		if ! hook_state="$(< "$INSTALL_CUSTOM_HOOK_MARKER")"; then
+			echo 'Error: Cannot read custom hook cutover state'
+			unlock_install_custom_hooks
+			return 1
+		fi
+		case "$hook_state" in
+			applied)
+				if ! rm -f -- "$INSTALL_CUSTOM_HOOK_MARKER" "$INSTALL_CUSTOM_HOOK_ENV"; then
+					echo 'Error: Cannot clear completed custom hook cutover state'
+					unlock_install_custom_hooks
+					return 1
+				fi
+				;;
+			deferred|ready|stopped) ;;
+			*)
+				echo "Error: Invalid custom hook cutover state: ${hook_state:-empty}"
+				unlock_install_custom_hooks
+				return 1
+				;;
+		esac
+	fi
+	unlock_install_custom_hooks
+}
+
+lock_install_custom_hooks() {
+	if ! exec {INSTALL_CUSTOM_HOOK_LOCK_FD}>> "$INSTALL_CUSTOM_HOOK_LOCK"; then
+		return 1
+	fi
+	if ! chmod 600 "$INSTALL_CUSTOM_HOOK_LOCK" || ! flock "$INSTALL_CUSTOM_HOOK_LOCK_FD"; then
+		exec {INSTALL_CUSTOM_HOOK_LOCK_FD}>&-
+		INSTALL_CUSTOM_HOOK_LOCK_FD=
+		return 1
+	fi
+}
+
+unlock_install_custom_hooks() {
+	[[ -n "$INSTALL_CUSTOM_HOOK_LOCK_FD" ]] || return 0
+	flock -u "$INSTALL_CUSTOM_HOOK_LOCK_FD" >/dev/null 2>&1 || true
+	exec {INSTALL_CUSTOM_HOOK_LOCK_FD}>&-
+	INSTALL_CUSTOM_HOOK_LOCK_FD=
+}
+
+write_install_custom_hook_state() {
+	local state=$1 temporary
+
+	temporary="$(mktemp "${INSTALL_CUSTOM_HOOK_MARKER}.XXXXXX")" || return 1
+	if ! printf '%s\n' "$state" > "$temporary" ||
+		! chmod 600 "$temporary" ||
+		! chown root:root "$temporary" ||
+		! mv -f -- "$temporary" "$INSTALL_CUSTOM_HOOK_MARKER"
+	then
+		rm -f -- "$temporary"
+		return 1
+	fi
+}
+
+read_install_unit_enabled_state() {
+	local load_state state unit=$1
+
+	state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+	if [[ -n "$state" ]]; then
+		printf '%s\n' "$state"
+		return 0
+	fi
+	load_state="$(systemctl show "$unit" --property=LoadState --value 2>/dev/null || true)"
+	if [[ "$load_state" == 'not-found' ]]; then
+		printf '%s\n' not-found
+		return 0
+	fi
+	return 1
+}
+
+restore_install_maintenance_units_before_snapshot() {
+	local failed=0 unit
+
+	[[ "$INSTALL_TRANSACTION_MAINTENANCE_STOPPED" == 'y' ]] || return 0
+	for unit in "${INSTALL_MAINTENANCE_STOP_UNITS[@]}"; do
+		case "${INSTALL_TRANSACTION_ACTIVE[$unit]:-unknown}" in
+			active|activating|reloading)
+				if ! systemctl start "$unit"; then
+					echo "Error: Cannot restore $unit after snapshot failure"
+					failed=1
+				fi
+				;;
+		esac
+	done
+	if (( failed == 0 )); then
+		INSTALL_TRANSACTION_MAINTENANCE_STOPPED=n
+	fi
+	return "$failed"
+}
+
+stop_and_verify_install_maintenance_units() {
+	local failed=0 state unit
+
+	for unit in "${INSTALL_MAINTENANCE_STOP_UNITS[@]}"; do
+		systemctl stop "$unit" >/dev/null 2>&1 || true
+	done
+	for unit in "${INSTALL_MAINTENANCE_STOP_UNITS[@]}"; do
+		state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+		case "$state" in
+			inactive|failed|unknown) ;;
+			*)
+				echo "Error: Cannot confirm that $unit stopped for the installation maintenance window (state: ${state:-unavailable})"
+				failed=1
+				;;
+		esac
+	done
+	return "$failed"
+}
+
+stop_install_maintenance_units_before_snapshot() {
+	INSTALL_TRANSACTION_MAINTENANCE_STOPPED=y
+	if ! stop_and_verify_install_maintenance_units; then
+		restore_install_maintenance_units_before_snapshot || true
+		return 1
+	fi
+}
+
+abort_install_transaction_before_snapshot() {
+	local message=$1
+
+	[[ -z "$INSTALL_TRANSACTION_ROOT" ]] || rm -rf -- "$INSTALL_TRANSACTION_ROOT" || true
+	INSTALL_TRANSACTION_ROOT=
+	echo "$message"
+	if ! restore_install_maintenance_units_before_snapshot; then
+		echo 'Error: Maintenance units were not fully restored after snapshot failure'
+	fi
+	return 1
+}
+
+begin_install_transaction() {
+	local copy_failed=n path state unit value
+	local old_umask
+
+	# Capture state before stopping writers. A failed pre-snapshot phase must be
+	# able to put timers and services back exactly as they were found.
+	for unit in "${INSTALL_TRANSACTION_UNITS[@]}"; do
+		state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+		if [[ -z "$state" ]]; then
+			echo "Error: Cannot read the active state of $unit before installation"
+			return 1
+		fi
+		INSTALL_TRANSACTION_ACTIVE["$unit"]="$state"
+		if ! state="$(read_install_unit_enabled_state "$unit")"; then
+			echo "Error: Cannot read the enablement state of $unit before installation"
+			return 1
+		fi
+		INSTALL_TRANSACTION_ENABLED["$unit"]="$state"
+	done
+	if ! stop_install_maintenance_units_before_snapshot; then
+		return 1
+	fi
+
+	old_umask="$(umask)"
+	umask 077
+	INSTALL_TRANSACTION_ROOT="$(mktemp -d /root/.antizapret-install-rollback.XXXXXX)" || {
+		umask "$old_umask"
+		abort_install_transaction_before_snapshot \
+			'Error: Cannot create installation rollback directory'
+		return 1
+	}
+	INSTALL_ROLLBACK_GUARD_COMMENT="${INSTALL_ROLLBACK_GUARD_COMMENT_PREFIX}-${INSTALL_TRANSACTION_ROOT##*.}"
+	chmod 700 "$INSTALL_TRANSACTION_ROOT" || {
+		umask "$old_umask"
+		abort_install_transaction_before_snapshot \
+			"Error: Cannot secure installation rollback directory: $INSTALL_TRANSACTION_ROOT"
+		return 1
+	}
+	mkdir -p "$INSTALL_TRANSACTION_ROOT/files" || {
+		umask "$old_umask"
+		abort_install_transaction_before_snapshot \
+			"Error: Cannot prepare installation rollback directory: $INSTALL_TRANSACTION_ROOT"
+		return 1
+	}
+
+	for path in "${INSTALL_TRANSACTION_PATHS[@]}"; do
+		if [[ -e "$path" || -L "$path" ]]; then
+			if ! mkdir -p "$INSTALL_TRANSACTION_ROOT/files${path%/*}" || \
+				! cp -a -- "$path" "$INSTALL_TRANSACTION_ROOT/files$path"
+			then
+				copy_failed=y
+				break
+			fi
+		fi
+	done
+	if [[ "$copy_failed" == 'y' ]]; then
+		umask "$old_umask"
+		abort_install_transaction_before_snapshot \
+			"Error: Cannot preserve the current installation under $INSTALL_TRANSACTION_ROOT"
+		return 1
+	fi
+
+	# sysctl files are restored with the other paths. Preserve the live values
+	# changed before commit too.
+	for path in \
+		/proc/sys/net/ipv4/ip_forward \
+		/proc/sys/net/ipv4/conf/all/route_localnet \
+		/proc/sys/net/ipv4/conf/default/route_localnet \
+		/proc/sys/net/ipv6/conf/*/disable_ipv6 \
+		/proc/sys/net/ipv6/conf/*/forwarding \
+		/proc/sys/net/ipv6/conf/*/accept_ra
+	do
+		[[ -r "$path" ]] || continue
+		if ! value="$(< "$path")"; then
+			copy_failed=y
+			break
+		fi
+		INSTALL_TRANSACTION_SYSCTL["$path"]="$value"
+	done
+	if [[ "$copy_failed" == 'y' ]]; then
+		umask "$old_umask"
+		abort_install_transaction_before_snapshot \
+			'Error: Cannot preserve the current network sysctl state'
+		return 1
+	fi
+
+	umask "$old_umask"
+	INSTALL_TRANSACTION_STARTED=y
+	# From this point a complete snapshot exists and the regular rollback owns
+	# restoration of unit state.
+	INSTALL_TRANSACTION_MAINTENANCE_STOPPED=n
+	trap 'finish_install_transaction $?' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+}
+
+snapshot_install_transaction_late_paths() {
+	local path staging="$INSTALL_TRANSACTION_ROOT/late-files"
+
+	[[ "$INSTALL_TRANSACTION_STARTED" == 'y' ]] || return 1
+	rm -rf -- "$staging" || return 1
+	mkdir -p "$staging" || return 1
+	for path in "${INSTALL_TRANSACTION_LATE_PATHS[@]}"; do
+		if [[ -e "$path" || -L "$path" ]]; then
+			if ! mkdir -p "$staging${path%/*}" || ! cp -a -- "$path" "$staging$path"; then
+				rm -rf -- "$staging" || true
+				return 1
+			fi
+		fi
+	done
+	INSTALL_TRANSACTION_LATE_SNAPSHOT=y
+}
+
+install_transaction_unit_was_active() {
+	case "${INSTALL_TRANSACTION_ACTIVE[$1]:-unknown}" in
+		active|activating|reloading) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+capture_install_rollback_current_vpn_units() {
+	local state unit
+
+	INSTALL_ROLLBACK_CURRENT_ACTIVE=()
+	for unit in \
+		openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+		openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service \
+		wg-quick@antizapret.service wg-quick@vpn.service
+	do
+		state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+		case "$state" in
+			active|activating|reloading) INSTALL_ROLLBACK_CURRENT_ACTIVE["$unit"]=y ;;
+			inactive|failed|unknown) INSTALL_ROLLBACK_CURRENT_ACTIVE["$unit"]=n ;;
+			*)
+				echo "Rollback error: Cannot read the current state of $unit (state: ${state:-unavailable})"
+				return 1
+				;;
+		esac
+	done
+}
+
+install_rollback_vpn_unit_was_active() {
+	local source=$1 unit=$2
+
+	if [[ "$source" == 'current' ]]; then
+		[[ "${INSTALL_ROLLBACK_CURRENT_ACTIVE[$unit]:-n}" == 'y' ]]
+	else
+		install_transaction_unit_was_active "$unit"
+	fi
+}
+
+read_install_rollback_openvpn_value() {
+	local file=$1 name=$2
+
+	[[ -f "$file" ]] || return 1
+	awk -v name="${name,,}" '
+		/^[[:space:]]*[#;]/ { next }
+		tolower($1) == name { value = $2; count++ }
+		END {
+			if (count != 1 || value == "") exit 1
+			print value
+		}
+	' "$file"
+}
+
+read_install_rollback_wireguard_port() {
+	local file=$1
+
+	[[ -f "$file" ]] || return 1
+	awk -F= '
+		{
+			key = $1
+			gsub(/[[:space:]]/, "", key)
+		}
+		tolower(key) == "listenport" {
+			value = $2
+			gsub(/[[:space:]]/, "", value)
+			count++
+		}
+		END {
+			if (count != 1 || value == "") exit 1
+			print value
+		}
+	' "$file"
+}
+
+append_install_rollback_guard_port() {
+	local variable=$1 port=$2 ports
+
+	[[ "$port" =~ ^[0-9]+$ && ${#port} -le 5 ]] || return 1
+	(( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
+	port=$((10#$port))
+	ports="${!variable}"
+	case ",$ports," in
+		*",$port,"*) return 0 ;;
+	esac
+	if [[ -n "$ports" ]]; then
+		printf -v "$variable" '%s,%s' "$ports" "$port"
+	else
+		printf -v "$variable" '%s' "$port"
+	fi
+}
+
+load_install_rollback_guard_ports() {
+	local config disable_ipv6=y file port proto source=${1:-captured} unit
+
+	INSTALL_ROLLBACK_GUARD_REQUIRED=n
+	INSTALL_ROLLBACK_TCP4_PORTS=
+	INSTALL_ROLLBACK_UDP4_PORTS=
+	INSTALL_ROLLBACK_TCP6_PORTS=
+	INSTALL_ROLLBACK_UDP6_PORTS=
+	if [[ -f "$INSTALL_ROLLBACK_SETUP_FILE" ]]; then
+		disable_ipv6="$(awk -F= '$1 == "DISABLE_IPV6" && $2 ~ /^[yn]$/ { value = $2 } END { print value }' "$INSTALL_ROLLBACK_SETUP_FILE")"
+		[[ "$disable_ipv6" =~ ^[yn]$ ]] || disable_ipv6=y
+	fi
+
+	for unit in \
+		openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+		openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service
+	do
+		install_rollback_vpn_unit_was_active "$source" "$unit" || continue
+		INSTALL_ROLLBACK_GUARD_REQUIRED=y
+		case "$unit" in
+			openvpn-server@antizapret-udp.service) config=/etc/openvpn/server/antizapret-udp.conf ;;
+			openvpn-server@vpn-udp.service) config=/etc/openvpn/server/vpn-udp.conf ;;
+			openvpn-server@antizapret-tcp.service) config=/etc/openvpn/server/antizapret-tcp.conf ;;
+			openvpn-server@vpn-tcp.service) config=/etc/openvpn/server/vpn-tcp.conf ;;
+		esac
+		if ! proto="$(read_install_rollback_openvpn_value "$config" proto)" ||
+			! port="$(read_install_rollback_openvpn_value "$config" port)"
+		then
+			echo "Rollback error: Cannot read the active OpenVPN listener from $config"
+			return 1
+		fi
+		case "${proto,,}" in
+			tcp4|tcp4-server)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_TCP4_PORTS "$port" || return 1
+				;;
+			tcp6|tcp6-server)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_TCP4_PORTS "$port" || return 1
+				append_install_rollback_guard_port INSTALL_ROLLBACK_TCP6_PORTS "$port" || return 1
+				;;
+			tcp|tcp-server)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_TCP4_PORTS "$port" || return 1
+				if [[ "$disable_ipv6" == 'n' ]]; then
+					append_install_rollback_guard_port INSTALL_ROLLBACK_TCP6_PORTS "$port" || return 1
+				fi
+				;;
+			udp4)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_UDP4_PORTS "$port" || return 1
+				;;
+			udp6)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_UDP4_PORTS "$port" || return 1
+				append_install_rollback_guard_port INSTALL_ROLLBACK_UDP6_PORTS "$port" || return 1
+				;;
+			udp)
+				append_install_rollback_guard_port INSTALL_ROLLBACK_UDP4_PORTS "$port" || return 1
+				if [[ "$disable_ipv6" == 'n' ]]; then
+					append_install_rollback_guard_port INSTALL_ROLLBACK_UDP6_PORTS "$port" || return 1
+				fi
+				;;
+			*)
+				echo "Rollback error: Unsupported proto $proto in $config"
+				return 1
+				;;
+		esac
+	done
+
+	for unit in wg-quick@antizapret.service wg-quick@vpn.service; do
+		install_rollback_vpn_unit_was_active "$source" "$unit" || continue
+		INSTALL_ROLLBACK_GUARD_REQUIRED=y
+		case "$unit" in
+			wg-quick@antizapret.service) file=/etc/wireguard/antizapret.conf ;;
+			wg-quick@vpn.service) file=/etc/wireguard/vpn.conf ;;
+		esac
+		if ! port="$(read_install_rollback_wireguard_port "$file")"; then
+			echo "Rollback error: Cannot read the active WireGuard listener from $file"
+			return 1
+		fi
+		append_install_rollback_guard_port INSTALL_ROLLBACK_UDP4_PORTS "$port" || return 1
+		# Kernel WireGuard owns both address families even when the tunnel has no
+		# inner IPv6 address yet.
+		append_install_rollback_guard_port INSTALL_ROLLBACK_UDP6_PORTS "$port" || return 1
+	done
+}
+
+add_install_rollback_vpn_guard() {
+	local ports protocol source=${1:-captured} tool variable
+
+	if [[ -z "$INSTALL_ROLLBACK_GUARD_COMMENT" ]]; then
+		echo 'Rollback error: Installation guard identifier is missing'
+		return 1
+	fi
+	load_install_rollback_guard_ports "$source" || return 1
+	for variable in \
+		INSTALL_ROLLBACK_TCP4_PORTS INSTALL_ROLLBACK_UDP4_PORTS \
+		INSTALL_ROLLBACK_TCP6_PORTS INSTALL_ROLLBACK_UDP6_PORTS
+	do
+		ports="${!variable}"
+		[[ -n "$ports" ]] || continue
+		case "$variable" in
+			INSTALL_ROLLBACK_TCP4_PORTS) tool=iptables; protocol=tcp ;;
+			INSTALL_ROLLBACK_UDP4_PORTS) tool=iptables; protocol=udp ;;
+			INSTALL_ROLLBACK_TCP6_PORTS) tool=ip6tables; protocol=tcp ;;
+			INSTALL_ROLLBACK_UDP6_PORTS) tool=ip6tables; protocol=udp ;;
+		esac
+		if ! "$tool" -w -I INPUT 1 -p "$protocol" -m multiport --dports "$ports" \
+			-m comment --comment "$INSTALL_ROLLBACK_GUARD_COMMENT" -j DROP
+		then
+			echo "Rollback error: Cannot protect restored VPN ports with $tool"
+			return 1
+		fi
+	done
+}
+
+remove_install_rollback_vpn_guard_from() {
+	local exact=${3:-n} listing marker=$2 number tool=$1
+
+	while :; do
+		if ! listing="$("$tool" -w -L INPUT --line-numbers -n 2>/dev/null)"; then
+			echo "Error: Cannot inspect $tool rollback guard rules"
+			return 1
+		fi
+		number="$(awk -v exact="$exact" -v marker="$marker" '
+			BEGIN { target = exact == "y" ? "/* " marker " */" : marker }
+			index($0, target) { print $1; exit }
+		' <<< "$listing")"
+		[[ -n "$number" ]] || return 0
+		if [[ ! "$number" =~ ^[0-9]+$ ]] || ! "$tool" -w -D INPUT "$number"; then
+			echo "Error: Cannot remove $tool rollback guard rule"
+			return 1
+		fi
+	done
+}
+
+remove_install_rollback_vpn_guard() {
+	local failed=0
+
+	remove_install_rollback_vpn_guard_from iptables "$INSTALL_ROLLBACK_GUARD_COMMENT_PREFIX" || failed=1
+	remove_install_rollback_vpn_guard_from ip6tables "$INSTALL_ROLLBACK_GUARD_COMMENT_PREFIX" || failed=1
+	return "$failed"
+}
+
+remove_current_install_rollback_vpn_guard() {
+	local failed=0
+
+	if [[ -z "$INSTALL_ROLLBACK_GUARD_COMMENT" ]]; then
+		echo 'Error: Installation guard identifier is missing'
+		return 1
+	fi
+	remove_install_rollback_vpn_guard_from iptables "$INSTALL_ROLLBACK_GUARD_COMMENT" y || failed=1
+	remove_install_rollback_vpn_guard_from ip6tables "$INSTALL_ROLLBACK_GUARD_COMMENT" y || failed=1
+	return "$failed"
+}
+
+verify_install_transaction_unit_active() {
+	local state unit=$1
+
+	state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+	if [[ "$state" != 'active' ]]; then
+		echo "Rollback error: $unit is not active after restart (state: ${state:-unavailable})"
+		return 1
+	fi
+}
+
+verify_install_unit_stopped() {
+	local state unit=$1
+
+	state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+	case "$state" in
+		inactive|failed|unknown) return 0 ;;
+		*)
+			echo "Error: Cannot confirm that $unit stopped (state: ${state:-unavailable})"
+			return 1
+			;;
+	esac
+}
+
+restore_install_transaction() {
+	local failed=0 hook_state= knob path runtime_paths=() saved state unit vpn_unit
+
+	set +e
+	if ! capture_install_rollback_current_vpn_units ||
+		! add_install_rollback_vpn_guard current
+	then
+		return 1
+	fi
+	if ! lock_install_custom_hooks; then
+		echo 'Rollback error: Cannot lock custom hook cutover state'
+		return 1
+	fi
+	if [[ -f "$INSTALL_CUSTOM_HOOK_MARKER" ]]; then
+		if ! hook_state="$(< "$INSTALL_CUSTOM_HOOK_MARKER")"; then
+			echo 'Rollback error: Cannot read custom hook cutover state'
+			unlock_install_custom_hooks
+			return 1
+		fi
+		# custom-up уже запускался: штатный stop должен парно
+		# вызвать custom-down, пока VPN-интерфейсы ещё живы.
+		if [[ "$hook_state" == 'applied' ]] && ! rm -f -- "$INSTALL_CUSTOM_HOOK_MARKER"; then
+			echo 'Rollback error: Cannot enable custom-down for the active cutover'
+			unlock_install_custom_hooks
+			return 1
+		fi
+	fi
+	unlock_install_custom_hooks
+	for unit in "${INSTALL_STOP_UNITS[@]}"; do
+		systemctl stop "$unit" >/dev/null 2>&1 || true
+		systemctl disable "$unit" >/dev/null 2>&1 || true
+	done
+	for unit in "${INSTALL_STOP_UNITS[@]}"; do
+		state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+		case "$state" in
+			inactive|failed|unknown) ;;
+			*)
+				echo "Rollback error: Cannot confirm that $unit stopped; live files were not replaced (state: ${state:-unavailable})"
+				failed=1
+				;;
+		esac
+		if ! state="$(read_install_unit_enabled_state "$unit")"; then
+			state=
+		fi
+		case "$state" in
+			disabled|static|indirect|generated|transient|linked|linked-runtime|alias|masked|masked-runtime|not-found) ;;
+			*)
+				echo "Rollback error: Cannot confirm that $unit is disabled; live files were not replaced (state: ${state:-unavailable})"
+				failed=1
+				;;
+		esac
+	done
+	if (( failed != 0 )); then
+		return "$failed"
+	fi
+	if ! rm -f -- "$INSTALL_CUSTOM_HOOK_MARKER" "$INSTALL_CUSTOM_HOOK_ENV"; then
+		echo 'Rollback error: Cannot clear custom hook cutover state'
+		return 1
+	fi
+
+	for path in "${INSTALL_TRANSACTION_PATHS[@]}"; do
+		saved="$INSTALL_TRANSACTION_ROOT/files$path"
+		if ! rm -rf -- "$path"; then
+			echo "Rollback error: Cannot remove replacement path $path"
+			failed=1
+			continue
+		fi
+		if [[ -e "$saved" || -L "$saved" ]]; then
+			if ! mkdir -p "${path%/*}" || ! cp -a -- "$saved" "$path"; then
+				echo "Rollback error: Cannot restore $path"
+				failed=1
+			fi
+		fi
+	done
+	if [[ "$INSTALL_TRANSACTION_LATE_SNAPSHOT" == 'y' ]]; then
+		for path in "${INSTALL_TRANSACTION_LATE_PATHS[@]}"; do
+			saved="$INSTALL_TRANSACTION_ROOT/late-files$path"
+			if ! rm -rf -- "$path"; then
+				echo "Rollback error: Cannot remove replacement path $path"
+				failed=1
+				continue
+			fi
+			if [[ -e "$saved" || -L "$saved" ]]; then
+				if ! mkdir -p "${path%/*}" || ! cp -a -- "$saved" "$path"; then
+					echo "Rollback error: Cannot restore $path"
+					failed=1
+				fi
+			fi
+		done
+	fi
+
+	mapfile -t runtime_paths < <(printf '%s\n' "${!INSTALL_TRANSACTION_SYSCTL[@]}" | sort)
+	for knob in disable_ipv6 forwarding accept_ra ip_forward route_localnet; do
+		for path in "${runtime_paths[@]}"; do
+			[[ "$path" == */"$knob" ]] || continue
+			# Tunnel interfaces disappear while their services are stopped. They
+			# inherit the restored default values when recreated.
+			[[ -w "$path" ]] || continue
+			if ! printf '%s\n' "${INSTALL_TRANSACTION_SYSCTL[$path]}" > "$path"; then
+				echo "Rollback error: Cannot restore live sysctl $path"
+				failed=1
+			fi
+		done
+	done
+
+	if ! set_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard; then
+		echo 'Rollback error: Cannot secure restored VPN private keys'
+		failed=1
+	fi
+	if ! systemctl daemon-reload; then
+		echo 'Rollback error: systemd daemon-reload failed'
+		failed=1
+	fi
+	if (( failed != 0 )); then
+		return "$failed"
+	fi
+
+	for unit in "${INSTALL_TRANSACTION_UNITS[@]}"; do
+		state="${INSTALL_TRANSACTION_ENABLED[$unit]}"
+		case "$state" in
+			enabled)
+				systemctl unmask "$unit" >/dev/null 2>&1 || true
+				systemctl unmask --runtime "$unit" >/dev/null 2>&1 || true
+				systemctl enable "$unit" >/dev/null 2>&1 || true
+				;;
+			enabled-runtime)
+				systemctl unmask "$unit" >/dev/null 2>&1 || true
+				systemctl unmask --runtime "$unit" >/dev/null 2>&1 || true
+				systemctl enable --runtime "$unit" >/dev/null 2>&1 || true
+				;;
+			disabled)
+				systemctl unmask "$unit" >/dev/null 2>&1 || true
+				systemctl unmask --runtime "$unit" >/dev/null 2>&1 || true
+				systemctl disable "$unit" >/dev/null 2>&1 || true
+				;;
+			masked)
+				systemctl mask "$unit" >/dev/null 2>&1 || true
+				;;
+			masked-runtime)
+				systemctl mask --runtime "$unit" >/dev/null 2>&1 || true
+				;;
+		esac
+	done
+	for unit in "${INSTALL_TRANSACTION_UNITS[@]}"; do
+		if ! state="$(read_install_unit_enabled_state "$unit")"; then
+			state=
+		fi
+		if [[ -z "$state" || "$state" != "${INSTALL_TRANSACTION_ENABLED[$unit]}" ]]; then
+			echo "Rollback error: Cannot restore the enablement state of $unit (expected: ${INSTALL_TRANSACTION_ENABLED[$unit]}, got: ${state:-unavailable})"
+			failed=1
+		fi
+	done
+	if (( failed != 0 )); then
+		return "$failed"
+	fi
+
+	if ! add_install_rollback_vpn_guard; then
+		return 1
+	fi
+	if [[ "$INSTALL_ROLLBACK_GUARD_REQUIRED" == 'y' ]] &&
+		! install_transaction_unit_was_active antizapret.service
+	then
+		echo 'Rollback error: Active VPN listeners cannot be restored without the previous firewall service'
+		return 1
+	fi
+
+	for unit in "${INSTALL_START_UNITS[@]}"; do
+		install_transaction_unit_was_active "$unit" || continue
+		if ! systemctl start "$unit"; then
+			echo "Rollback error: Cannot restart $unit"
+			return 1
+		fi
+		if [[ "$unit" == 'antizapret.service' ]]; then
+			verify_install_transaction_unit_active antizapret.service || return 1
+			for vpn_unit in \
+				openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+				openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service \
+				wg-quick@antizapret.service wg-quick@vpn.service
+			do
+				install_transaction_unit_was_active "$vpn_unit" || continue
+				verify_install_transaction_unit_active "$vpn_unit" || return 1
+			done
+			remove_current_install_rollback_vpn_guard || return 1
+		fi
+	done
+	return 0
+}
+
+finish_install_transaction() {
+	local original_status=$1 rollback_status=0
+
+	trap - EXIT ERR INT TERM
+	if [[ "$INSTALL_TRANSACTION_STARTED" == 'y' && "$INSTALL_TRANSACTION_COMMITTED" != 'y' ]]; then
+		echo 'Installation did not complete; restoring the previous VPN and DNS configuration...'
+		restore_install_transaction || rollback_status=$?
+		if (( rollback_status == 0 )); then
+			rm -rf -- "$INSTALL_TRANSACTION_ROOT" || true
+			echo 'Managed VPN and DNS configuration restored; package upgrades were not rolled back.'
+		else
+			echo "Rollback is incomplete. Recovery data was kept in $INSTALL_TRANSACTION_ROOT"
+		fi
+	elif [[ "$INSTALL_TRANSACTION_STARTED" != 'y' && "$INSTALL_TRANSACTION_MAINTENANCE_STOPPED" == 'y' ]]; then
+		# The filesystem snapshot was not completed. No managed files changed,
+		# but writers stopped for a consistent copy still have to come back.
+		restore_install_maintenance_units_before_snapshot || true
+	fi
+	[[ -z "${BACKUP_STAGING:-}" ]] || rm -rf -- "$BACKUP_STAGING" || true
+	[[ -z "${OPENVPN_CCD_STAGING:-}" ]] || rm -rf -- "$OPENVPN_CCD_STAGING" || true
+	rm -rf -- /tmp/antizapret /tmp/dnslib || true
+	exit "$original_status"
+}
+
+commit_install_transaction() {
+	local hook_state=
+
+	if ! lock_install_custom_hooks; then
+		echo 'Error: Cannot lock custom hook cutover state before commit'
+		return 1
+	fi
+	if [[ -f "$INSTALL_CUSTOM_HOOK_MARKER" ]]; then
+		if ! hook_state="$(< "$INSTALL_CUSTOM_HOOK_MARKER")"; then
+			echo 'Error: Cannot read custom hook cutover state before commit'
+			unlock_install_custom_hooks
+			return 1
+		fi
+	fi
+	if [[ "$hook_state" != 'applied' ]]; then
+		echo "Error: Custom hook cutover is not ready for commit: ${hook_state:-missing}"
+		unlock_install_custom_hooks
+		return 1
+	fi
+	if ! rm -f -- "$INSTALL_CUSTOM_HOOK_MARKER" "$INSTALL_CUSTOM_HOOK_ENV"; then
+		echo 'Error: Cannot clear custom hook cutover state before commit'
+		unlock_install_custom_hooks
+		return 1
+	fi
+	unlock_install_custom_hooks
+	INSTALL_TRANSACTION_COMMITTED=y
+	if ! rm -rf -- "$INSTALL_TRANSACTION_ROOT"; then
+		echo "Warning: Cannot remove completed installation rollback data: $INSTALL_TRANSACTION_ROOT"
+	fi
+}
+
 # Проверка необходимости перезагрузить
 if [[ -f /var/run/reboot-required ]] || pidof apt apt-get dpkg unattended-upgrades &>/dev/null; then
 	echo 'Error: You need to reboot this server before installation!'
@@ -49,6 +983,9 @@ fi
 if [[ "$EUID" -ne 0 ]]; then
 	echo 'Error: You need to run this as root!'
 	exit 3
+fi
+if ! acquire_install_lock; then
+	exit 17
 fi
 
 cd /root
@@ -139,24 +1076,6 @@ elif [[ "$OS" == 'ubuntu' ]]; then
 else
 	echo "Error: Your Linux distribution ($OS) is not supported!"
 	exit 7
-fi
-
-# Очистка диска
-echo 'Cleaning disk, please wait...'
-journalctl --vacuum-size=1B -q
-find /var/log -name "*.gz" -delete
-find /var/log -name "*.1" -delete
-find /var/log -type f -exec truncate -s 0 {} +
-[[ -d /etc/openvpn/server/logs ]] && find /etc/openvpn/server/logs -type f -exec truncate -s 0 {} +
-dpkg --configure -a >/dev/null
-apt-get install -f -y >/dev/null
-apt-get clean >/dev/null
-if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
-	apt-mark manual bird2 >/dev/null
-fi
-apt-get autoremove --purge -y >/dev/null
-if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
-	apt-mark auto bird2 >/dev/null
 fi
 
 # Проверка свободного места (минимум 2Гб)
@@ -252,6 +1171,748 @@ if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
     raise SystemExit(1)
 PY
 }
+
+derive_vpn_ipv6_layout() {
+	local values=()
+	mapfile -t values < <(python3 - "$VPN_IPV6_PREFIX" <<'PY'
+import ipaddress
+import sys
+
+base = ipaddress.ip_network(sys.argv[1], strict=True)
+for subnet_id in (0x2900, 0x2904, 0x2908, 0x2800, 0x2804, 0x2808):
+    network = ipaddress.IPv6Network(
+        (int(base.network_address) | (subnet_id << 64), 64)
+    )
+    print(network)
+    print(ipaddress.IPv6Address(int(network.network_address) + 1))
+PY
+	)
+	if (( ${#values[@]} != 12 )); then
+		echo 'Error: Cannot derive VPN IPv6 networks from VPN_IPV6_PREFIX'
+		exit 14
+	fi
+
+	ANTIZAPRET_UDP_NETWORK6=${values[0]}
+	ANTIZAPRET_UDP_DNS6=${values[1]}
+	ANTIZAPRET_TCP_NETWORK6=${values[2]}
+	ANTIZAPRET_TCP_DNS6=${values[3]}
+	ANTIZAPRET_WG_NETWORK6=${values[4]}
+	ANTIZAPRET_WG_DNS6=${values[5]}
+	VPN_UDP_NETWORK6=${values[6]}
+	VPN_UDP_DNS6=${values[7]}
+	VPN_TCP_NETWORK6=${values[8]}
+	VPN_TCP_DNS6=${values[9]}
+	VPN_WG_NETWORK6=${values[10]}
+	VPN_WG_DNS6=${values[11]}
+}
+
+keep_ipv4_addresses() {
+	local address
+	FILTERED_DNS_ADDRESSES=()
+	for address in "$@"; do
+		[[ "$address" == *:* ]] || FILTERED_DNS_ADDRESSES+=("$address")
+	done
+}
+
+select_dns_addresses() {
+	local cloudflare_quad9=(
+		1.1.1.1 9.9.9.10
+		2606:4700:4700::1111 2620:fe::10
+	)
+
+	case "$ANTIZAPRET_DNS" in
+		1)
+			ANTI_UPSTREAMS=(
+				62.76.76.62 195.208.4.1
+				2001:6d0:6d0::2001 2a0c:a9c7:8::1
+			)
+			PROXY_UPSTREAMS=("${cloudflare_quad9[@]}")
+			;;
+		2|3)
+			if [[ "$ANTIZAPRET_DNS" == '2' ]]; then
+				echo 'Warning: SkyDNS is no longer available; using Cloudflare+Quad9'
+			fi
+			ANTI_UPSTREAMS=("${cloudflare_quad9[@]}")
+			PROXY_UPSTREAMS=("${cloudflare_quad9[@]}")
+			;;
+		4)
+			ANTI_UPSTREAMS=(83.220.169.155 212.109.195.93)
+			PROXY_UPSTREAMS=("${ANTI_UPSTREAMS[@]}")
+			;;
+		5)
+			ANTI_UPSTREAMS=(
+				111.88.96.50 111.88.96.51
+				2a00:ab00:1233:26::50 2a00:ab00:1233:26::51
+			)
+			PROXY_UPSTREAMS=("${ANTI_UPSTREAMS[@]}")
+			;;
+		6)
+			ANTI_UPSTREAMS=(
+				95.216.204.218 80.253.249.40
+				2a01:4f9:c014:6dac::1 2a12:bec4:1460:5b7::2
+			)
+			PROXY_UPSTREAMS=("${ANTI_UPSTREAMS[@]}")
+			;;
+		*)
+			echo "Error: Unsupported AntiZapret DNS choice: $ANTIZAPRET_DNS"
+			exit 16
+			;;
+	esac
+
+	case "$VPN_DNS" in
+		1) VPN_CLIENT_DNS=() ;;
+		2) VPN_CLIENT_DNS=(1.1.1.1 1.0.0.1 2606:4700:4700::1111 2606:4700:4700::1001) ;;
+		3) VPN_CLIENT_DNS=(9.9.9.10 149.112.112.10 2620:fe::10 2620:fe::fe:10) ;;
+		4) VPN_CLIENT_DNS=(8.8.8.8 8.8.4.4 2001:4860:4860::8888 2001:4860:4860::8844) ;;
+		5) VPN_CLIENT_DNS=(94.140.14.14 94.140.15.15 2a10:50c0::ad1:ff 2a10:50c0::ad2:ff) ;;
+		6) VPN_CLIENT_DNS=(83.220.169.155 212.109.195.93) ;;
+		7) VPN_CLIENT_DNS=(111.88.96.50 111.88.96.51 2a00:ab00:1233:26::50 2a00:ab00:1233:26::51) ;;
+		8) VPN_CLIENT_DNS=(95.216.204.218 80.253.249.40 2a01:4f9:c014:6dac::1 2a12:bec4:1460:5b7::2) ;;
+		*)
+			echo "Error: Unsupported full VPN DNS choice: $VPN_DNS"
+			exit 16
+			;;
+	esac
+
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		keep_ipv4_addresses "${ANTI_UPSTREAMS[@]}"
+		ANTI_UPSTREAMS=("${FILTERED_DNS_ADDRESSES[@]}")
+		keep_ipv4_addresses "${PROXY_UPSTREAMS[@]}"
+		PROXY_UPSTREAMS=("${FILTERED_DNS_ADDRESSES[@]}")
+		keep_ipv4_addresses "${VPN_CLIENT_DNS[@]}"
+		VPN_CLIENT_DNS=("${FILTERED_DNS_ADDRESSES[@]}")
+	fi
+}
+
+write_lua_list() {
+	local name=$1 separator= value
+	shift
+	printf '  %s = {' "$name"
+	for value in "$@"; do
+		printf "%s'%s'" "$separator" "$value"
+		separator=', '
+	done
+	printf '},\n'
+}
+
+write_kresd_generated_config() {
+	local destination=${KRESD_GENERATED_CONFIG_PATH:-/etc/knot-resolver/antizapret-generated.conf}
+	local temporary ipv6_enabled=false vpn_dns_self_hosted=false
+	[[ "$DISABLE_IPV6" != 'y' ]] && ipv6_enabled=true
+	[[ "$VPN_DNS" == '1' ]] && vpn_dns_self_hosted=true
+	temporary="$(mktemp "${destination%/*}/.antizapret-generated.conf.XXXXXX")"
+	{
+		echo 'return {'
+		printf '  ipv6_enabled = %s,\n' "$ipv6_enabled"
+		printf '  vpn_dns_self_hosted = %s,\n' "$vpn_dns_self_hosted"
+		write_lua_list anti_upstreams "${ANTI_UPSTREAMS[@]}"
+		write_lua_list proxy_upstreams "${PROXY_UPSTREAMS[@]}"
+		printf "  anti_ipv6 = {\n"
+		printf "    udp = { network = '%s', gateway = '%s' },\n" "$ANTIZAPRET_UDP_NETWORK6" "$ANTIZAPRET_UDP_DNS6"
+		printf "    tcp = { network = '%s', gateway = '%s' },\n" "$ANTIZAPRET_TCP_NETWORK6" "$ANTIZAPRET_TCP_DNS6"
+		printf "    wireguard = { network = '%s', gateway = '%s' },\n" "$ANTIZAPRET_WG_NETWORK6" "$ANTIZAPRET_WG_DNS6"
+		printf "  },\n"
+		printf "  vpn_ipv6 = {\n"
+		printf "    udp = { network = '%s', gateway = '%s' },\n" "$VPN_UDP_NETWORK6" "$VPN_UDP_DNS6"
+		printf "    tcp = { network = '%s', gateway = '%s' },\n" "$VPN_TCP_NETWORK6" "$VPN_TCP_DNS6"
+		printf "    wireguard = { network = '%s', gateway = '%s' },\n" "$VPN_WG_NETWORK6" "$VPN_WG_DNS6"
+		printf "  },\n"
+		echo '}'
+	} > "$temporary"
+	chmod 644 "$temporary"
+	chown root:root "$temporary"
+	mv -f "$temporary" "$destination"
+}
+
+set_dns_directives() {
+	local kind=$1 path=$2
+	shift 2
+	python3 - "$kind" "$path" "$@" <<'PY'
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+kind, raw_path, *addresses = sys.argv[1:]
+path = Path(raw_path)
+if not addresses:
+    raise SystemExit(f"no DNS addresses supplied for {path}")
+
+original = path.read_text(encoding="utf-8")
+lines = original.splitlines(keepends=True)
+
+if kind == "openvpn":
+    def managed(line: str) -> bool:
+        value = line.strip()
+        return value.startswith('push "dhcp-option DNS ') and value.endswith('"')
+
+    replacement = [f'push "dhcp-option DNS {address}"\n' for address in addresses]
+elif kind == "wireguard":
+    def managed(line: str) -> bool:
+        return line.strip().startswith("DNS =")
+
+    replacement = [f"DNS = {', '.join(addresses)}\n"]
+else:
+    raise SystemExit(f"unsupported DNS directive type: {kind}")
+
+result: list[str] = []
+inserted = False
+for line in lines:
+    if managed(line):
+        if not inserted:
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            result.extend(item.replace("\n", newline) for item in replacement)
+            inserted = True
+        continue
+    result.append(line)
+
+if not inserted:
+    raise SystemExit(f"managed DNS directive not found in {path}")
+
+content = "".join(result)
+if content == original:
+    raise SystemExit(0)
+
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+)
+temporary = Path(temporary_name)
+try:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, mode)
+    os.replace(temporary, path)
+except BaseException:
+    temporary.unlink(missing_ok=True)
+    raise
+PY
+}
+
+configure_installed_dns() {
+	local anti_udp=("$IP.29.0.1")
+	local anti_tcp=("$IP.29.4.1")
+	local anti_wireguard=("$IP.29.8.1")
+	local vpn_udp vpn_tcp vpn_wireguard
+
+	if [[ "$DISABLE_IPV6" != 'y' ]]; then
+		anti_udp+=("$ANTIZAPRET_UDP_DNS6")
+		anti_tcp+=("$ANTIZAPRET_TCP_DNS6")
+		anti_wireguard+=("$ANTIZAPRET_WG_DNS6")
+	fi
+
+	if [[ "$VPN_DNS" == '1' ]]; then
+		vpn_udp=("$IP.28.0.1")
+		vpn_tcp=("$IP.28.4.1")
+		vpn_wireguard=("$IP.28.8.1")
+		if [[ "$DISABLE_IPV6" != 'y' ]]; then
+			vpn_udp+=("$VPN_UDP_DNS6")
+			vpn_tcp+=("$VPN_TCP_DNS6")
+			vpn_wireguard+=("$VPN_WG_DNS6")
+		fi
+	else
+		vpn_udp=("${VPN_CLIENT_DNS[@]}")
+		vpn_tcp=("${VPN_CLIENT_DNS[@]}")
+		vpn_wireguard=("${VPN_CLIENT_DNS[@]}")
+	fi
+
+	set_dns_directives openvpn /etc/openvpn/server/antizapret-udp.conf "${anti_udp[@]}"
+	set_dns_directives openvpn /etc/openvpn/server/antizapret-tcp.conf "${anti_tcp[@]}"
+	set_dns_directives openvpn /etc/openvpn/server/vpn-udp.conf "${vpn_udp[@]}"
+	set_dns_directives openvpn /etc/openvpn/server/vpn-tcp.conf "${vpn_tcp[@]}"
+	set_dns_directives wireguard /etc/wireguard/templates/antizapret-client-wg.conf "${anti_wireguard[@]}"
+	set_dns_directives wireguard /etc/wireguard/templates/antizapret-client-am.conf "${anti_wireguard[@]}"
+	set_dns_directives wireguard /etc/wireguard/templates/vpn-client-wg.conf "${vpn_wireguard[@]}"
+	set_dns_directives wireguard /etc/wireguard/templates/vpn-client-am.conf "${vpn_wireguard[@]}"
+}
+
+validate_installed_kresd_config() {
+	local instance output run_dir status
+	for instance in 1 2; do
+		run_dir="$(mktemp -d "/tmp/antizapret-kresd-check.${instance}.XXXXXX")"
+		chown knot-resolver:knot-resolver "$run_dir"
+		set +e
+		output="$(SYSTEMD_INSTANCE="$instance" timeout 3 kresd -n -c /etc/knot-resolver/kresd.conf "$run_dir" 2>&1)"
+		status=$?
+		set -e
+		rm -rf -- "$run_dir"
+		if (( status != 124 )); then
+			echo "Error: Knot Resolver instance $instance rejected its configuration"
+			[[ -z "$output" ]] || echo "$output"
+			exit 17
+		fi
+	done
+}
+
+mark_dns6_runtime_ready() {
+	local state_dir=/root/antizapret/state
+	local marker="$state_dir/dns6-ready"
+	local temporary
+
+	mkdir -p "$state_dir"
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		rm -f -- "$marker"
+		return
+	fi
+	temporary="$(mktemp "$state_dir/.dns6-ready.XXXXXX")"
+	printf 'version=1\n' > "$temporary"
+	chmod 644 "$temporary"
+	mv -f -- "$temporary" "$marker"
+}
+
+health_error() {
+	echo "Error: Runtime health check failed: $*" >&2
+	return 26
+}
+
+wait_for_interface_address() {
+	local family=$1 interface=$2 expected=$3 attempt
+
+	if [[ "$family" != '4' && "$family" != '6' ]]; then
+		health_error "unsupported address family IPv$family for $interface"
+	fi
+	for (( attempt = 1; attempt <= 10; attempt++ )); do
+		if ip -o link show dev "$interface" 2>/dev/null |
+			grep -Eq '<([^>]*,)?UP(,[^>]*)?>' &&
+			ip "-$family" -o address show dev "$interface" 2>/dev/null |
+			awk -v expected="$expected" '
+				$4 == expected {
+					unusable = 0
+					for (field = 5; field <= NF; field++) {
+						if ($field == "tentative" || $field == "dadfailed") {
+							unusable = 1
+						}
+					}
+					if (!unusable) found = 1
+				}
+				END { exit !found }
+			'
+		then
+			return 0
+		fi
+		sleep 1
+	done
+	health_error "$interface is not UP with IPv$family address $expected"
+}
+
+single_openvpn_value() {
+	local path=$1 directive=$2
+
+	awk -v directive="$directive" '
+		{
+			line = $0
+			sub(/[;#].*$/, "", line)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+			if (line == "") next
+			fields = split(line, token, /[[:space:]]+/)
+			if (token[1] != directive) next
+			matches++
+			if (fields != 2) malformed = 1
+			value = token[2]
+		}
+		END {
+			if (matches != 1 || malformed) exit 1
+			print value
+		}
+	' "$path"
+}
+
+wait_for_openvpn_listener() {
+	local transport=$1 family=$2 port=$3 dual_stack=$4
+	local attempt socket_output
+
+	for (( attempt = 1; attempt <= 10; attempt++ )); do
+		if [[ "$transport" == 'udp' ]]; then
+			socket_output="$(ss -H -lnuep "-$family" "sport = :$port" 2>/dev/null || true)"
+		else
+			socket_output="$(ss -H -lntep "-$family" "sport = :$port" 2>/dev/null || true)"
+		fi
+		if [[ "$dual_stack" == 'y' ]]; then
+			if grep -F '"openvpn"' <<< "$socket_output" | grep -Fq 'v6only:0'; then
+				return 0
+			fi
+		elif grep -Fq '"openvpn"' <<< "$socket_output"; then
+			return 0
+		fi
+		sleep 1
+	done
+	health_error "OpenVPN has no usable IPv$family $transport listener on port $port"
+}
+
+require_openvpn_runtime() {
+	local name=$1 transport=$2 ipv4_cidr=$3 ipv6_cidr=$4
+	local config="/etc/openvpn/server/$name.conf"
+	local expected_proto port proto
+
+	if ! proto="$(single_openvpn_value "$config" proto)"; then
+		health_error "$config must contain exactly one valid proto directive"
+	fi
+	if ! port="$(single_openvpn_value "$config" port)" ||
+		[[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 ))
+	then
+		health_error "$config must contain exactly one valid port directive"
+	fi
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		[[ "$transport" == 'udp' ]] && expected_proto=udp4 || expected_proto=tcp4
+		if [[ "${proto,,}" != "$expected_proto" ]]; then
+			health_error "$config uses proto $proto instead of $expected_proto"
+		fi
+		wait_for_interface_address 4 "$name" "$ipv4_cidr"
+		wait_for_openvpn_listener "$transport" 4 "$port" n
+	else
+		[[ "$transport" == 'udp' ]] && expected_proto=udp6 || expected_proto=tcp6-server
+		if [[ "${proto,,}" != "$expected_proto" ]]; then
+			health_error "$config uses proto $proto instead of $expected_proto"
+		fi
+		wait_for_interface_address 4 "$name" "$ipv4_cidr"
+		wait_for_interface_address 6 "$name" "$ipv6_cidr"
+		wait_for_openvpn_listener "$transport" 6 "$port" y
+	fi
+}
+
+require_wireguard_runtime() {
+	local interface=$1 port=$2 ipv4_cidr=$3 ipv6_cidr=$4
+	local actual_port ipv4_socket=n ipv6_socket=n
+
+	wait_for_interface_address 4 "$interface" "$ipv4_cidr"
+	if ! actual_port="$(wg show "$interface" listen-port 2>/dev/null)" ||
+		[[ "$actual_port" != "$port" ]]
+	then
+		health_error "$interface is not listening on WireGuard port $port"
+	fi
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		return 0
+	fi
+	wait_for_interface_address 6 "$interface" "$ipv6_cidr"
+	if ss -H -lnu -4 "sport = :$port" 2>/dev/null | grep -q .; then
+		ipv4_socket=y
+	fi
+	if ss -H -lnu -6 "sport = :$port" 2>/dev/null | grep -q .; then
+		ipv6_socket=y
+	fi
+	# Kernel WireGuard sockets are not visible in every ss build. If one family
+	# is visible, the other one must be visible too.
+	if [[ "$ipv4_socket" != "$ipv6_socket" ]]; then
+		health_error "$interface WireGuard socket is not dual-stack on port $port"
+	fi
+}
+
+require_ip6tables_rule() {
+	local table=$1 chain=$2
+	shift 2
+	if ! ip6tables -w -t "$table" -C "$chain" "$@" 2>/dev/null; then
+		health_error "missing ip6tables $table/$chain rule: $*"
+	fi
+}
+
+require_dns6_dnat() {
+	local interface=$1 destination=$2 protocol
+	for protocol in udp tcp; do
+		require_ip6tables_rule nat ANTIZAPRET6-PREROUTING \
+			-i "$interface" -p "$protocol" --dport 53 \
+			-j DNAT --to-destination "$destination"
+	done
+}
+
+require_firewall6_runtime() {
+	local set_name
+
+	[[ -f /root/antizapret/state/dns6-ready ]] ||
+		health_error 'IPv6 DNS runtime marker is missing'
+	require_ip6tables_rule filter INPUT -j ANTIZAPRET6-INPUT
+	require_ip6tables_rule filter FORWARD -j ANTIZAPRET6-FORWARD
+	require_ip6tables_rule filter OUTPUT -j ANTIZAPRET6-OUTPUT
+	require_ip6tables_rule mangle PREROUTING -j ANTIZAPRET6-MARK
+	require_ip6tables_rule nat PREROUTING -j ANTIZAPRET6-PREROUTING
+	require_ip6tables_rule nat POSTROUTING -j ANTIZAPRET6-POSTROUTING
+	if ! ip6tables -w -t nat -S ANTIZAPRET6-MAPPING &>/dev/null; then
+		health_error 'missing ip6tables nat/ANTIZAPRET6-MAPPING chain'
+	fi
+	for set_name in antizapret-allow6 antizapret-deny6 antizapret-drop6 antizapret-forward6; do
+		if ! ipset list "$set_name" 2>/dev/null |
+			grep -Eq '^Header:.*family inet6([[:space:]]|$)'
+		then
+			health_error "missing inet6 ipset $set_name"
+		fi
+	done
+}
+
+require_firewall6_disabled() {
+	local jump table chain target
+	local jumps=(
+		'filter INPUT ANTIZAPRET6-INPUT'
+		'filter FORWARD ANTIZAPRET6-FORWARD'
+		'filter OUTPUT ANTIZAPRET6-OUTPUT'
+		'mangle PREROUTING ANTIZAPRET6-MARK'
+		'nat PREROUTING ANTIZAPRET6-PREROUTING'
+		'nat POSTROUTING ANTIZAPRET6-POSTROUTING'
+	)
+
+	[[ ! -e /root/antizapret/state/dns6-ready ]] ||
+		health_error 'IPv6 DNS runtime marker exists while IPv6 is disabled'
+	for jump in "${jumps[@]}"; do
+		read -r table chain target <<< "$jump"
+		if ip6tables -w -t "$table" -C "$chain" -j "$target" 2>/dev/null; then
+			health_error "ip6tables jump to $target remains while IPv6 is disabled"
+		fi
+	done
+}
+
+probe_dns_records() {
+	python3 - "$@" <<'PY'
+import ipaddress
+import os
+import socket
+import struct
+import sys
+import time
+
+
+QUERY_TYPES = {"A": 1, "AAAA": 28}
+
+
+def encode_name(name: str) -> bytes:
+    labels = name.rstrip(".").encode("ascii").split(b".")
+    if not labels or any(not label or len(label) > 63 for label in labels):
+        raise ValueError(f"invalid DNS name: {name!r}")
+    return b"".join(bytes((len(label),)) + label for label in labels) + b"\x00"
+
+
+def skip_name(packet: bytes, offset: int) -> int:
+    while True:
+        if offset >= len(packet):
+            raise RuntimeError("truncated DNS name")
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 2 > len(packet):
+                raise RuntimeError("truncated DNS name pointer")
+            return offset + 2
+        if length & 0xC0:
+            raise RuntimeError("invalid DNS name label")
+        offset += 1
+        if length == 0:
+            return offset
+        offset += length
+        if offset > len(packet):
+            raise RuntimeError("truncated DNS name label")
+
+
+def receive_exact(connection: socket.socket, size: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < size:
+        chunk = connection.recv(size - len(chunks))
+        if not chunk:
+            raise RuntimeError("short TCP DNS response")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def validate_response(
+    response: bytes,
+    identifier: int,
+    question: bytes,
+    query_type: int,
+    expected: str | None,
+) -> None:
+    if len(response) < 12:
+        raise RuntimeError("short DNS response")
+    response_id, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", response[:12])
+    if response_id != identifier:
+        raise RuntimeError("DNS transaction ID mismatch")
+    if not flags & 0x8000:
+        raise RuntimeError("packet is not a DNS response")
+    if questions != 1:
+        raise RuntimeError(f"DNS response has {questions} questions")
+    rcode = flags & 0x000F
+    if rcode != 0:
+        raise RuntimeError(f"DNS resolver returned RCODE {rcode}")
+    if answers < 1:
+        raise RuntimeError("DNS response has no answers")
+    if response[12 : 12 + len(question)] != question:
+        raise RuntimeError("DNS response question mismatch")
+
+    offset = 12 + len(question)
+    returned_addresses: set[str] = set()
+    for _ in range(answers):
+        offset = skip_name(response, offset)
+        if offset + 10 > len(response):
+            raise RuntimeError("truncated DNS resource record")
+        record_type, record_class, _, data_length = struct.unpack(
+            "!HHIH", response[offset : offset + 10]
+        )
+        offset += 10
+        data = response[offset : offset + data_length]
+        if len(data) != data_length:
+            raise RuntimeError("truncated DNS record data")
+        offset += data_length
+        if record_class == 1 and record_type == query_type:
+            if record_type == QUERY_TYPES["A"] and data_length == 4:
+                returned_addresses.add(str(ipaddress.IPv4Address(data)))
+            elif record_type == QUERY_TYPES["AAAA"] and data_length == 16:
+                returned_addresses.add(str(ipaddress.IPv6Address(data)))
+
+    if expected is not None:
+        normalized = str(ipaddress.ip_address(expected))
+        if normalized not in returned_addresses:
+            actual = ", ".join(sorted(returned_addresses)) or "none"
+            raise RuntimeError(f"expected {normalized}, received {actual}")
+
+
+def query(
+    address: str,
+    name: str,
+    query_type_name: str,
+    expected: str | None,
+    transport: str,
+    identifier: int,
+) -> None:
+    family = socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+    endpoint = (address, 53, 0, 0) if family == socket.AF_INET6 else (address, 53)
+    query_type = QUERY_TYPES[query_type_name]
+    question = encode_name(name) + struct.pack("!HH", query_type, 1)
+    packet = struct.pack("!HHHHHH", identifier, 0x0100, 1, 0, 0, 0) + question
+    socket_type = socket.SOCK_DGRAM if transport == "udp" else socket.SOCK_STREAM
+    with socket.socket(family, socket_type) as connection:
+        connection.settimeout(2)
+        connection.bind((address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0))
+        connection.connect(endpoint)
+        if transport == "udp":
+            connection.send(packet)
+            response = connection.recv(4096)
+        else:
+            connection.sendall(struct.pack("!H", len(packet)) + packet)
+            response_size = struct.unpack("!H", receive_exact(connection, 2))[0]
+            response = receive_exact(connection, response_size)
+    validate_response(response, identifier, question, query_type, expected)
+
+
+arguments = sys.argv[1:]
+if not arguments or len(arguments) % 4:
+    print("DNS probe requires ADDRESS NAME TYPE EXPECTED groups", file=sys.stderr)
+    raise SystemExit(2)
+
+for query_index in range(0, len(arguments), 4):
+    address, name, query_type_name, expected_value = arguments[query_index : query_index + 4]
+    if query_type_name not in QUERY_TYPES:
+        print(f"unsupported DNS query type: {query_type_name}", file=sys.stderr)
+        raise SystemExit(2)
+    expected = expected_value or None
+    for transport_index, transport in enumerate(("udp", "tcp")):
+        last_error: BaseException | None = None
+        for attempt in range(3):
+            identifier = (os.getpid() + query_index * 17 + transport_index * 7 + attempt) & 0xFFFF
+            try:
+                query(address, name, query_type_name, expected, transport, identifier)
+                break
+            except (OSError, RuntimeError, ValueError, struct.error) as exc:
+                last_error = exc
+                time.sleep(0.5)
+        else:
+            print(
+                f"DNS {transport.upper()} {name} {query_type_name} probe failed "
+                f"via {address}: {last_error}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+PY
+}
+
+require_dns_runtime() {
+	local family
+
+	for family in 4 6; do
+		if ss -H -lnut "-$family" 'sport = :53' 2>/dev/null |
+			awk '$5 == "*:53" || $5 == "0.0.0.0:53" || $5 == "[::]:53" || $5 == ":::53" { found = 1 } END { exit !found }'
+		then
+			health_error "wildcard IPv$family DNS listener is active"
+		fi
+	done
+	if ! probe_dns_records "$@"; then
+		health_error 'Knot Resolver DNS probe failed'
+	fi
+}
+
+validate_cutover_runtime() {
+	local server_name
+	local dns_queries=(
+		127.1.1.1 localhost. A ''
+		127.2.2.2 localhost. A ''
+	)
+
+	server_name="$(hostname)"
+	[[ -n "$server_name" ]] || health_error 'system hostname is empty'
+
+	if [[ "$OPENVPN_UDP_ENABLE" == 'y' ]]; then
+		require_openvpn_runtime antizapret-udp udp "$IP.29.0.1/22" "$ANTIZAPRET_UDP_DNS6/64"
+		require_openvpn_runtime vpn-udp udp "$IP.28.0.1/22" "$VPN_UDP_DNS6/64"
+		if [[ "$DISABLE_IPV6" != 'y' ]]; then
+			dns_queries+=(
+				"$ANTIZAPRET_UDP_DNS6" "$server_name" A "$IP.29.0.1"
+				"$ANTIZAPRET_UDP_DNS6" "$server_name" AAAA "$ANTIZAPRET_UDP_DNS6"
+			)
+			if [[ "$VPN_DNS" == '1' ]]; then
+				dns_queries+=(
+					"$VPN_UDP_DNS6" "$server_name" A "$IP.28.0.1"
+					"$VPN_UDP_DNS6" "$server_name" AAAA "$VPN_UDP_DNS6"
+				)
+			fi
+		fi
+	fi
+	if [[ "$OPENVPN_TCP_ENABLE" == 'y' ]]; then
+		require_openvpn_runtime antizapret-tcp tcp "$IP.29.4.1/22" "$ANTIZAPRET_TCP_DNS6/64"
+		require_openvpn_runtime vpn-tcp tcp "$IP.28.4.1/22" "$VPN_TCP_DNS6/64"
+		if [[ "$DISABLE_IPV6" != 'y' ]]; then
+			dns_queries+=(
+				"$ANTIZAPRET_TCP_DNS6" "$server_name" A "$IP.29.4.1"
+				"$ANTIZAPRET_TCP_DNS6" "$server_name" AAAA "$ANTIZAPRET_TCP_DNS6"
+			)
+			if [[ "$VPN_DNS" == '1' ]]; then
+				dns_queries+=(
+					"$VPN_TCP_DNS6" "$server_name" A "$IP.28.4.1"
+					"$VPN_TCP_DNS6" "$server_name" AAAA "$VPN_TCP_DNS6"
+				)
+			fi
+		fi
+	fi
+	if [[ "$WIREGUARD_ENABLE" == 'y' ]]; then
+		require_wireguard_runtime antizapret 51443 "$IP.29.8.1/24" "$ANTIZAPRET_WG_DNS6/64"
+		require_wireguard_runtime vpn 51080 "$IP.28.8.1/24" "$VPN_WG_DNS6/64"
+		if [[ "$DISABLE_IPV6" != 'y' ]]; then
+			dns_queries+=(
+				"$ANTIZAPRET_WG_DNS6" "$server_name" A "$IP.29.8.1"
+				"$ANTIZAPRET_WG_DNS6" "$server_name" AAAA "$ANTIZAPRET_WG_DNS6"
+			)
+			if [[ "$VPN_DNS" == '1' ]]; then
+				dns_queries+=(
+					"$VPN_WG_DNS6" "$server_name" A "$IP.28.8.1"
+					"$VPN_WG_DNS6" "$server_name" AAAA "$VPN_WG_DNS6"
+				)
+			fi
+		fi
+	fi
+
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		require_firewall6_disabled
+	else
+		require_firewall6_runtime
+		if [[ "$OPENVPN_UDP_ENABLE" == 'y' ]]; then
+			require_dns6_dnat antizapret-udp "$ANTIZAPRET_UDP_DNS6"
+			[[ "$VPN_DNS" != '1' ]] || require_dns6_dnat vpn-udp "$VPN_UDP_DNS6"
+		fi
+		if [[ "$OPENVPN_TCP_ENABLE" == 'y' ]]; then
+			require_dns6_dnat antizapret-tcp "$ANTIZAPRET_TCP_DNS6"
+			[[ "$VPN_DNS" != '1' ]] || require_dns6_dnat vpn-tcp "$VPN_TCP_DNS6"
+		fi
+		if [[ "$WIREGUARD_ENABLE" == 'y' ]]; then
+			require_dns6_dnat antizapret "$ANTIZAPRET_WG_DNS6"
+			[[ "$VPN_DNS" != '1' ]] || require_dns6_dnat vpn "$VPN_WG_DNS6"
+		fi
+	fi
+	require_dns_runtime "${dns_queries[@]}"
+}
 # Python is normally present on supported systems. On a minimal image perform
 # an early structural ULA /48 check, then repeat the authoritative validation
 # immediately after Python is installed.
@@ -286,20 +1947,16 @@ until [[ "$VPN_WARP" =~ ^[yn]$ ]]; do
 done
 echo
 echo -e 'Choose DNS resolvers for \e[1;32mAntiZapret VPN\e[0m (antizapret-*):'
-echo '    1) Cloudflare+Quad9  - Recommended by default'
-echo '        +MSK-IX+NSDI *'
-echo '    2) Cloudflare+Quad9  - Use if default choice fails to resolve domains'
-echo '        +SkyDNS *          Need register account (Family plan) & add this server IP at https://skydns.ru'
-echo '    3) Cloudflare+Quad9  - Use if previous choice fails to resolve domains'
+echo '    1) MSK-IX+NSDI       - Recommended for users located in Russia'
+echo '    3) Cloudflare+Quad9  - Public fallback'
 echo '    4) Comss **          - More details: https://comss.ru/disqus/page.php?id=7315'
 echo '    5) XBox **           - More details: https://xbox-dns.ru'
 echo '    6) Malw **           - More details: https://info.dns.malw.link'
 echo
-echo '  * - DNS resolvers optimized for users located in Russia'
 echo ' ** - Enable additional proxying and hide this server IP on some internet resources'
 echo '      Use only if this server is geolocated in Russia or problems accessing some internet resources'
 until [[ "$ANTIZAPRET_DNS" =~ ^[1-6]$ ]]; do
-	read -rp 'DNS choice [1-6]: ' -e -i 1 ANTIZAPRET_DNS
+	read -rp 'DNS choice [1,3-6]: ' -e -i 1 ANTIZAPRET_DNS
 done
 echo
 echo -e 'Choose DNS resolvers for \e[1;32mfull VPN\e[0m (vpn-*):'
@@ -384,17 +2041,58 @@ until [[ "$CLIENT_ISOLATION" =~ ^[yn]$ ]]; do
 	read -rp $'Enable \001\e[1;32m\002all VPN\001\e[0m\002 client and server isolation? [y/n]: ' -e -i y CLIENT_ISOLATION
 done
 echo
-while read -rp 'Enter valid domain name for this OpenVPN server or press Enter to skip: ' -e OPENVPN_HOST
+
+normalize_endpoint_host() {
+	local host=$1
+
+	if [[ "$host" == \[*\] ]]; then
+		host="${host#[}"
+		host="${host%]}"
+	fi
+	printf '%s\n' "$host"
+}
+
+endpoint_has_ipv4() {
+	getent ahostsv4 "$1" 2>/dev/null | awk 'NF && $1 !~ /:/ { found=1 } END { exit !found }'
+}
+
+endpoint_has_native_ipv6() {
+	getent ahostsv6 "$1" 2>/dev/null | awk '
+		NF && $1 ~ /:/ && tolower($1) !~ /^::ffff:/ { found=1 }
+		END { exit !found }
+	'
+}
+
+endpoint_is_usable() {
+	if [[ "$DISABLE_IPV6" == 'y' ]]; then
+		endpoint_has_ipv4 "$1"
+	else
+		endpoint_has_ipv4 "$1" || endpoint_has_native_ipv6 "$1"
+	fi
+}
+
+warn_endpoint_families() {
+	local host=$1 service=$2
+	[[ -n "$host" && "$DISABLE_IPV6" != 'y' ]] || return 0
+	endpoint_has_ipv4 "$host" || echo "Warning: $service endpoint $host has no IPv4 address"
+	endpoint_has_native_ipv6 "$host" || echo "Warning: $service endpoint $host has no native IPv6 address"
+}
+
+while read -rp 'Enter a resolvable domain name or IP address for this OpenVPN server, or press Enter to use server IPv4: ' -e OPENVPN_HOST
 do
 	[[ -z "$OPENVPN_HOST" ]] && break
-	[[ -n $(getent ahostsv4 "$OPENVPN_HOST") ]] && break
+	OPENVPN_HOST="$(normalize_endpoint_host "$OPENVPN_HOST")"
+	endpoint_is_usable "$OPENVPN_HOST" && break
 done
+warn_endpoint_families "$OPENVPN_HOST" OpenVPN
 echo
-while read -rp 'Enter valid domain name for this WireGuard/AmneziaWG server or press Enter to skip: ' -e WIREGUARD_HOST
+while read -rp 'Enter a resolvable domain name or IP address for this WireGuard/AmneziaWG server, or press Enter to use server IPv4: ' -e WIREGUARD_HOST
 do
 	[[ -z "$WIREGUARD_HOST" ]] && break
-	[[ -n $(getent ahostsv4 "$WIREGUARD_HOST") ]] && break
+	WIREGUARD_HOST="$(normalize_endpoint_host "$WIREGUARD_HOST")"
+	endpoint_is_usable "$WIREGUARD_HOST" && break
 done
+warn_endpoint_families "$WIREGUARD_HOST" WireGuard/AmneziaWG
 echo
 until [[ "$ROUTE_ALL" =~ ^[yn]$ ]]; do
 	read -rp $'Route all traffic for domains via \001\e[1;32m\002AntiZapret VPN\001\e[0m\002, excluding Russian domains and domains from config/exclude-hosts.txt? [y/n]: ' -e -i n ROUTE_ALL
@@ -446,27 +2144,42 @@ echo
 #echo
 echo 'Installation, please wait...'
 
-# Отключим фоновые обновления системы
-systemctl stop unattended-upgrades
-systemctl stop apt-daily.timer
-systemctl stop apt-daily-upgrade.timer
+handle_error() {
+	local status=$1 line=$2 command=$3
+	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
+	echo -e "\e[1;31mError at line $line: $command\e[0m"
+	exit "$status"
+}
 
-# Остановим и выключим обновляемые службы
-systemctl disable --now kresd@1
-systemctl disable --now kresd@2
-systemctl disable --now antizapret
-systemctl disable --now antizapret-update.timer
-systemctl disable --now antizapret-update
-systemctl disable --now openvpn-server@antizapret-udp
-systemctl disable --now openvpn-server@vpn-udp
-systemctl disable --now openvpn-server@antizapret-tcp
-systemctl disable --now openvpn-server@vpn-tcp
-systemctl disable --now wg-quick@antizapret
-systemctl disable --now wg-quick@vpn
-if [[ "$BGP_ENABLE" == 'y' || "$MANAGED_BGP_PRESENT" == 'y' ]]; then
-	systemctl disable --now antizapret-bgp || true
-fi
+trap 'finish_install_transaction $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+set -Ee
+
+# Старые установки могли оставить ключи с широкими правами. Зажимаем их до
+# snapshot, чтобы rollback тоже не сохранил небезопасные режимы.
 require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
+
+if ! begin_install_transaction; then
+	exit 18
+fi
+
+# Writers were stopped and checked before the filesystem snapshot. Keep them
+# stopped until the new runtime has passed the cutover checks.
+
+# Repair/cleanup package operations are inside the rollback window: package
+# postinst scripts cannot restart a half-replaced VPN/DNS configuration.
+dpkg --configure -a >/dev/null
+apt-get install -f -y >/dev/null
+apt-get clean >/dev/null
+if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark manual bird2 >/dev/null
+fi
+apt-get autoremove --purge -y >/dev/null
+if [[ "$BIRD_WAS_AUTO" == 'y' ]]; then
+	apt-mark auto bird2 >/dev/null
+fi
 
 # Удалим ненужные службы
 apt-get purge -y ufw
@@ -494,10 +2207,6 @@ if [[ "$SSH_PROTECTION" == 'y' ]]; then
 	apt-get purge -y sshguard || true
 fi
 
-# Удаляем кэш Knot Resolver
-rm -rf /var/cache/knot-resolver/*
-rm -rf /var/cache/knot-resolver2/*
-
 # Сохраняем персональные OpenVPN CCD-файлы с маршрутизируемыми IPv6-префиксами.
 OPENVPN_CCD_STAGING=/tmp/antizapret-openvpn-ccd
 rm -rf "$OPENVPN_CCD_STAGING"
@@ -508,57 +2217,6 @@ fi
 if [[ -d /etc/openvpn/server/ccd2 ]]; then
 	find /etc/openvpn/server/ccd2 -maxdepth 1 -type f ! -name DEFAULT -exec cp -a -t "$OPENVPN_CCD_STAGING/ccd2" -- {} +
 fi
-
-# Удаляем старые файлы OpenVPN и WireGuard
-rm -rf /etc/openvpn/server/*
-rm -rf /etc/openvpn/client/*
-rm -rf /etc/wireguard/templates/*
-
-# Удаляем скомпилированный патченный OpenVPN
-make -C /usr/local/src/openvpn uninstall
-rm -rf /usr/local/src/openvpn
-
-# Настраиваем IPv6
-IPV6_SYSCTL=/etc/sysctl.d/99-antizapret-ipv6.conf
-rm -f /etc/sysctl.d/99-disable-ipv6.conf /etc/sysctl.d/99-proxy-ipv6.conf "$IPV6_SYSCTL"
-if [[ "$DISABLE_IPV6" == 'y' ]]; then
-	cat > "$IPV6_SYSCTL" <<'EOF'
-# IPv6 disabled by AntiZapret installer
-net.ipv6.conf.all.forwarding=0
-net.ipv6.conf.default.forwarding=0
-net.ipv6.conf.all.disable_ipv6=1
-net.ipv6.conf.default.disable_ipv6=1
-net.ipv6.conf.lo.disable_ipv6=1
-EOF
-else
-	cat > "$IPV6_SYSCTL" <<EOF
-# IPv6 enabled by AntiZapret installer
-net.ipv6.conf.all.disable_ipv6=0
-net.ipv6.conf.default.disable_ipv6=0
-net.ipv6.conf.lo.disable_ipv6=0
-net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2
-net.ipv6.conf.all.forwarding=1
-net.ipv6.conf.default.forwarding=1
-EOF
-fi
-sysctl -p "$IPV6_SYSCTL" || true
-
-# Удаляем переопределённые параметры ядра
-sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
-
-# Принудительная загрузка модуля nf_conntrack
-echo 'nf_conntrack' > /etc/modules-load.d/nf_conntrack.conf
-
-# Завершим выполнение скрипта при ошибке
-set -e
-
-# Обработка ошибок
-handle_error() {
-	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
-	exit 1
-}
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
 # Обновляем систему
 rm -rf /etc/apt/sources.list.d/cznic-labs-knot-resolver.list
@@ -596,10 +2254,16 @@ elif [[ "$OS" == 'debian' ]] && (( VERSION < 14 )); then
 fi
 BGP_PACKAGE=
 [[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
-apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 python3-pip wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate
+OPENVPN_PATCH_PACKAGES=()
+if [[ "$OPENVPN_PATCH" != '0' ]]; then
+	OPENVPN_PATCH_PACKAGES=(tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev)
+fi
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_PATCH_PACKAGES[@]}"
 if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
 	exit 14
 fi
+derive_vpn_ipv6_layout
+select_dns_addresses
 if [[ "$BGP_ENABLE" == 'y' && "$BIRD_WAS_INSTALLED" == 'n' ]]; then
 	# The distribution unit is not used; AntiZapret has an isolated instance.
 	systemctl disable --now bird.service || true
@@ -618,14 +2282,30 @@ fi
 apt-get clean
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
-# Клонируем репозиторий и устанавливаем dnslib
+# Package postinst may re-arm timers stopped before the snapshot.
+if ! stop_and_verify_install_maintenance_units; then
+	echo 'Error: Package installation left maintenance writers active'
+	exit 19
+fi
+
+if ! snapshot_install_transaction_late_paths; then
+	echo 'Error: Cannot preserve the installed Knot Resolver modules'
+	exit 24
+fi
+
+# Клонируем dnslib. Пакет положим в runtime-дерево, не в root site-packages.
 rm -rf /tmp/dnslib
 git clone https://github.com/paulc/dnslib.git /tmp/dnslib
-PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --force-reinstall --user /tmp/dnslib
 
 # Клонируем репозиторий antizapret
 rm -rf /tmp/antizapret
 git clone https://github.com/Nessusd/AntiZapret-VPN-ipv6.git /tmp/antizapret
+if [[ ! -d /tmp/dnslib/dnslib ]]; then
+	echo 'Error: dnslib package directory is missing'
+	exit 20
+fi
+rm -rf /tmp/antizapret/setup/root/antizapret/dnslib
+cp -a /tmp/dnslib/dnslib /tmp/antizapret/setup/root/antizapret/dnslib
 
 # A disabled BGP option must not install any BGP runtime files.
 if [[ "$BGP_ENABLE" != 'y' ]]; then
@@ -645,7 +2325,6 @@ BACKUP_STAGING=
 RESTORE_ROOT=/root
 if [[ -n "$BACKUP_ARCHIVE" ]]; then
 	BACKUP_STAGING="$(mktemp -d /tmp/antizapret-backup.XXXXXX)"
-	trap '[[ -z "${BACKUP_STAGING:-}" ]] || rm -rf -- "$BACKUP_STAGING"' EXIT
 	if ! tar -xzf "$BACKUP_ARCHIVE" -C "$BACKUP_STAGING" --no-same-owner --no-same-permissions; then
 		rm -rf -- "$BACKUP_STAGING"
 		BACKUP_STAGING=
@@ -694,22 +2373,6 @@ require_vpn_key_permissions \
 	/tmp/antizapret/setup/etc/openvpn/easyrsa3 \
 	/tmp/antizapret/setup/etc/wireguard
 
-# Источники в /root больше не нужны после успешного копирования. Очищаем их
-# и при восстановлении из архива, иначе они могут стать неявным устаревшим
-# backup для следующего запуска без архива.
-rm -rf /root/easyrsa3
-rm -rf /root/wireguard
-rm -rf /root/config
-rm -rf /root/knot-resolver
-rm -rf /root/custom
-rm -rf /root/openvpn-ccd
-if [[ "$RESTORE_ROOT" != /root ]]; then
-	rm -rf -- "$BACKUP_STAGING"
-	BACKUP_STAGING=
-	trap - EXIT
-fi
-rm -rf "$OPENVPN_CCD_STAGING"
-
 # Сохраняем настройки
 echo "SETUP_DATE=$(date --iso-8601=seconds)
 OPENVPN_UDP_ENABLE=$OPENVPN_UDP_ENABLE
@@ -720,6 +2383,18 @@ BGP_SERVER_ASN=$BGP_SERVER_ASN
 BGP_CLIENT_ASN=$BGP_CLIENT_ASN
 DISABLE_IPV6=$DISABLE_IPV6
 VPN_IPV6_PREFIX=$VPN_IPV6_PREFIX
+ANTIZAPRET_UDP_NETWORK6=$ANTIZAPRET_UDP_NETWORK6
+ANTIZAPRET_UDP_DNS6=$ANTIZAPRET_UDP_DNS6
+ANTIZAPRET_TCP_NETWORK6=$ANTIZAPRET_TCP_NETWORK6
+ANTIZAPRET_TCP_DNS6=$ANTIZAPRET_TCP_DNS6
+ANTIZAPRET_WG_NETWORK6=$ANTIZAPRET_WG_NETWORK6
+ANTIZAPRET_WG_DNS6=$ANTIZAPRET_WG_DNS6
+VPN_UDP_NETWORK6=$VPN_UDP_NETWORK6
+VPN_UDP_DNS6=$VPN_UDP_DNS6
+VPN_TCP_NETWORK6=$VPN_TCP_NETWORK6
+VPN_TCP_DNS6=$VPN_TCP_DNS6
+VPN_WG_NETWORK6=$VPN_WG_NETWORK6
+VPN_WG_DNS6=$VPN_WG_DNS6
 OPENVPN_PATCH=$OPENVPN_PATCH
 OPENVPN_DCO=$OPENVPN_DCO
 ANTIZAPRET_WARP=$ANTIZAPRET_WARP
@@ -797,6 +2472,108 @@ find /tmp/antizapret/setup/etc/openvpn/server/scripts -type f -exec chmod +x {} 
 chown -R knot-resolver:knot-resolver /var/cache/knot-resolver
 chown -R knot-resolver:knot-resolver /var/cache/knot-resolver2
 
+# Штатный stop вызовет старый custom-down, пока VPN-интерфейсы ещё живы.
+# Сразу после этого гасим сами туннели и начинаем замену live-дерева.
+if ! capture_install_rollback_current_vpn_units ||
+	! add_install_rollback_vpn_guard current
+then
+	echo 'Error: Cannot protect active VPN listeners before installation cutover'
+	exit 23
+fi
+systemctl stop antizapret.service >/dev/null 2>&1 || true
+if ! verify_install_unit_stopped antizapret.service; then
+	echo 'Error: Cannot stop antizapret.service before publishing the new installation'
+	exit 23
+fi
+for unit in \
+	openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+	openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service \
+	wg-quick@antizapret.service wg-quick@vpn.service
+do
+	systemctl disable --now "$unit" >/dev/null 2>&1 || true
+done
+for unit in \
+	openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+	openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service \
+	wg-quick@antizapret.service wg-quick@vpn.service
+do
+	if ! verify_install_unit_stopped "$unit"; then
+		echo "Error: Cannot stop $unit before publishing the new installation"
+		exit 23
+	fi
+done
+
+for unit in kresd.target kres-cache-gc.service kresd@1.service kresd@2.service; do
+	systemctl stop "$unit" >/dev/null 2>&1 || true
+done
+for unit in kresd.target kres-cache-gc.service kresd@1.service kresd@2.service; do
+	if ! verify_install_unit_stopped "$unit"; then
+		echo "Error: Cannot stop $unit before publishing the new installation"
+		exit 23
+	fi
+done
+rm -rf /var/cache/knot-resolver/*
+rm -rf /var/cache/knot-resolver2/*
+
+# Ранний старт нового firewall не должен дёргать custom hooks
+# до возврата VPN-интерфейсов.
+rm -f -- "$INSTALL_CUSTOM_HOOK_ENV"
+write_install_custom_hook_state deferred
+
+# Удаляем старые файлы OpenVPN и WireGuard.
+rm -rf /etc/openvpn/server/*
+rm -rf /etc/openvpn/client/*
+rm -rf /etc/wireguard/templates/*
+
+# Удаляем скомпилированный патченный OpenVPN.
+make -C /usr/local/src/openvpn uninstall || true
+rm -f /usr/local/lib/tmpfiles.d/openvpn.conf /usr/local/lib/tmpfiles.d/tmpfiles-openvpn.conf
+rm -rf /usr/local/src/openvpn
+
+# Настраиваем IPv6.
+IPV6_SYSCTL=/etc/sysctl.d/99-antizapret-ipv6.conf
+rm -f /etc/sysctl.d/99-disable-ipv6.conf /etc/sysctl.d/99-proxy-ipv6.conf "$IPV6_SYSCTL"
+if [[ "$DISABLE_IPV6" == 'y' ]]; then
+	cat > "$IPV6_SYSCTL" <<'EOF'
+# IPv6 disabled by AntiZapret installer
+net.ipv6.conf.all.forwarding=0
+net.ipv6.conf.default.forwarding=0
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+EOF
+else
+	cat > "$IPV6_SYSCTL" <<EOF
+# IPv6 enabled by AntiZapret installer
+net.ipv6.conf.all.disable_ipv6=0
+net.ipv6.conf.default.disable_ipv6=0
+net.ipv6.conf.lo.disable_ipv6=0
+net/ipv6/conf/${DEFAULT_INTERFACE}/accept_ra=2
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.default.forwarding=1
+EOF
+fi
+if [[ "$DISABLE_IPV6" != 'y' ]]; then
+	# disable_ipv6=1 removes live addresses and routes. Apply it only on the
+	# final reboot; enabling IPv6 here remains reversible.
+	sysctl -p "$IPV6_SYSCTL"
+	IPV6_ROUTE_CHECK="$(ip -6 route get 2606:4700:4700::1111 2>/dev/null || true)"
+	if ! grep -Eq '(^|[[:space:]])src[[:space:]]+[23][0-9A-Fa-f]*:' <<< "$IPV6_ROUTE_CHECK"; then
+		echo 'Warning: No usable public IPv6 route found; IPv6 VPN endpoints and IPv6 DNS upstreams will be unavailable until the server network is configured'
+	fi
+fi
+
+# Forwarding and the existing IPv4 DNS DNAT must work before the final reboot.
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+sysctl -w net.ipv4.conf.all.route_localnet=1 >/dev/null
+sysctl -w net.ipv4.conf.default.route_localnet=1 >/dev/null
+
+# Удаляем переопределённые параметры ядра.
+sed -i '/^$/!{/^#/!d}' /etc/sysctl.conf
+
+# Принудительная загрузка модуля nf_conntrack.
+echo 'nf_conntrack' > /etc/modules-load.d/nf_conntrack.conf
+
 # Копируем нужное, удаляем не нужное
 rm -rf /root/antizapret
 cp -r /tmp/antizapret/setup/* /
@@ -804,64 +2581,35 @@ require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 rm -rf /tmp/dnslib
 rm -rf /tmp/antizapret
 
+# Одноразовые источники уже опубликованы. Они входят в snapshot и вернутся
+# только при rollback; после успешного cutover устаревший backup не останется.
+rm -rf /root/easyrsa3
+rm -rf /root/wireguard
+rm -rf /root/config
+rm -rf /root/knot-resolver
+rm -rf /root/custom
+rm -rf /root/openvpn-ccd
+if [[ -n "${BACKUP_STAGING:-}" ]]; then
+	rm -rf -- "$BACKUP_STAGING"
+	BACKUP_STAGING=
+fi
+rm -rf -- "$OPENVPN_CCD_STAGING"
+OPENVPN_CCD_STAGING=
+
 if [[ "$BGP_ENABLE" == 'y' ]]; then
 	mkdir -p /etc/antizapret-bgp /var/lib/antizapret-bgp
 	chmod 755 /etc/antizapret-bgp /var/lib/antizapret-bgp
-	systemctl daemon-reload
 elif [[ "$MANAGED_BGP_PRESENT" == 'y' ]]; then
 	# Remove only files and state owned by the AntiZapret BGP instance.
 	rm -f /etc/systemd/system/antizapret-bgp.service
 	rm -rf /etc/antizapret-bgp /var/lib/antizapret-bgp /run/antizapret-bgp
-	systemctl daemon-reload
 fi
+systemctl daemon-reload
 
-# Настраиваем DNS в AntiZapret VPN
-if [[ "$ANTIZAPRET_DNS" == '2' ]]; then
-	# Cloudflare+Quad9+SkyDNS
-	sed -i "s/{'62\.76\.76\.62', '62\.76\.62\.76', '195\.208\.4\.1', '195\.208\.5\.1'}/'193.58.251.251'/" /etc/knot-resolver/kresd.conf
-elif [[ "$ANTIZAPRET_DNS" == '3' ]]; then
-	# Cloudflare+Quad9
-	sed -i "s/'62\.76\.76\.62', '62\.76\.62\.76', '195\.208\.4\.1', '195\.208\.5\.1'/'1.1.1.1', '1.0.0.1', '9.9.9.10', '149.112.112.10'/" /etc/knot-resolver/kresd.conf
-elif [[ "$ANTIZAPRET_DNS" == '4' ]]; then
-	# Comss
-	sed -i "s/'62\.76\.76\.62', '62\.76\.62\.76', '195\.208\.4\.1', '195\.208\.5\.1'/'83.220.169.155', '212.109.195.93', '195.133.25.16'/" /etc/knot-resolver/kresd.conf
-	sed -i "s/'1\.1\.1\.1', '1\.0\.0\.1', '9\.9\.9\.10', '149\.112\.112\.10'/'83.220.169.155', '212.109.195.93', '195.133.25.16'/" /etc/knot-resolver/kresd.conf
-elif [[ "$ANTIZAPRET_DNS" == '5' ]]; then
-	# XBox
-	sed -i "s/'62\.76\.76\.62', '62\.76\.62\.76', '195\.208\.4\.1', '195\.208\.5\.1'/'111.88.96.50', '111.88.96.51'/" /etc/knot-resolver/kresd.conf
-	sed -i "s/'1\.1\.1\.1', '1\.0\.0\.1', '9\.9\.9\.10', '149\.112\.112\.10'/'111.88.96.50', '111.88.96.51'/" /etc/knot-resolver/kresd.conf
-elif [[ "$ANTIZAPRET_DNS" == '6' ]]; then
-	# Malw
-	sed -i "s/'62\.76\.76\.62', '62\.76\.62\.76', '195\.208\.4\.1', '195\.208\.5\.1'/'84.21.189.133', '193.23.209.189'/" /etc/knot-resolver/kresd.conf
-	sed -i "s/'1\.1\.1\.1', '1\.0\.0\.1', '9\.9\.9\.10', '149\.112\.112\.10'/'84.21.189.133', '193.23.209.189'/" /etc/knot-resolver/kresd.conf
-fi
-
-# Настраиваем DNS в full VPN
-if [[ "$VPN_DNS" == '3' ]]; then
-	# Quad9
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 9.9.9.10"\npush "dhcp-option DNS 149.112.112.10"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/9.9.9.10, 149.112.112.10/' /etc/wireguard/templates/vpn-client*.conf
-elif [[ "$VPN_DNS" == '4' ]]; then
-	# Google
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 8.8.8.8"\npush "dhcp-option DNS 8.8.4.4"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/8.8.8.8, 8.8.4.4/' /etc/wireguard/templates/vpn-client*.conf
-elif [[ "$VPN_DNS" == '5' ]]; then
-	# AdGuard
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 94.140.14.14"\npush "dhcp-option DNS 94.140.15.15"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/94.140.14.14, 94.140.15.15/' /etc/wireguard/templates/vpn-client*.conf
-elif [[ "$VPN_DNS" == '6' ]]; then
-	# Comss
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 83.220.169.155"\npush "dhcp-option DNS 212.109.195.93"\npush "dhcp-option DNS 195.133.25.16"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/83.220.169.155, 212.109.195.93, 195.133.25.16/' /etc/wireguard/templates/vpn-client*.conf
-elif [[ "$VPN_DNS" == '7' ]]; then
-	# XBox
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 111.88.96.50"\npush "dhcp-option DNS 111.88.96.51"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/111.88.96.50, 111.88.96.51/' /etc/wireguard/templates/vpn-client*.conf
-elif [[ "$VPN_DNS" == '8' ]]; then
-	# Malw
-	sed -i '/push "dhcp-option DNS 1\.1\.1\.1"/,+1c push "dhcp-option DNS 84.21.189.133"\npush "dhcp-option DNS 193.23.209.189"' /etc/openvpn/server/vpn*.conf
-	sed -i 's/1\.1\.1\.1, 1\.0\.0\.1/84.21.189.133, 193.23.209.189/' /etc/wireguard/templates/vpn-client*.conf
-fi
+# Upstreams and ULA listeners are generated from the selected settings.  The
+# file has no .lua suffix so it is not mistaken for user DNS configuration in
+# backups; setup.sh recreates it on every installation.
+write_kresd_generated_config
 
 # Не используем альтернативный диапазон подменных IPv4-адресов
 # 198.18.0.0/15 => 10.30.0.0/15 или 172.30.0.0/15
@@ -879,6 +2627,9 @@ if [[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]]; then
 else
 	find /etc/wireguard -name '*.conf' -exec sed -i 's/s = 172\./s = 10\./g' {} +
 fi
+
+configure_installed_dns
+validate_installed_kresd_config
 
 # Добавляем или удаляем управляемую IPv6-конфигурацию OpenVPN.
 [[ "$DISABLE_IPV6" == 'y' ]] && OPENVPN_IPV6_ACTION=strip || OPENVPN_IPV6_ACTION=migrate
@@ -901,17 +2652,26 @@ if [[ "$OPENVPN_LOG" == 'y' ]]; then
 	sed -i '/^#\(verb\|log\)/s/^#//' /etc/openvpn/server/*.conf
 fi
 
-# Изменяем поведение policy.PASS в Knot Resolver
-sed -i '/function policy\.PASS(state, _)/,/^end$/s/return state/return nil/' /usr/lib/knot-resolver/kres_modules/policy.lua
+# Изменяем поведение policy.PASS в Knot Resolver. Незнакомую верстку не патчим.
+POLICY_PASS_FILE=/usr/lib/knot-resolver/kres_modules/policy.lua
+POLICY_PASS_FUNCTIONS="$(grep -Ec '^[[:space:]]*function policy\.PASS\(state, _\)[[:space:]]*$' "$POLICY_PASS_FILE" || true)"
+POLICY_PASS_BLOCK="$(sed -n '/^[[:space:]]*function policy\.PASS(state, _)[[:space:]]*$/,/^[[:space:]]*end[[:space:]]*$/p' "$POLICY_PASS_FILE")"
+POLICY_PASS_STATE="$(grep -Ec '^[[:space:]]*return state[[:space:]]*$' <<< "$POLICY_PASS_BLOCK" || true)"
+POLICY_PASS_NIL="$(grep -Ec '^[[:space:]]*return nil[[:space:]]*$' <<< "$POLICY_PASS_BLOCK" || true)"
+if [[ "$POLICY_PASS_FUNCTIONS" != 1 ]] || (( POLICY_PASS_STATE + POLICY_PASS_NIL != 1 )); then
+	echo 'Error: Unsupported Knot Resolver policy.PASS implementation'
+	exit 25
+fi
+sed -i '/^[[:space:]]*function policy\.PASS(state, _)[[:space:]]*$/,/^[[:space:]]*end[[:space:]]*$/s/^[[:space:]]*return state[[:space:]]*$/\treturn nil/' "$POLICY_PASS_FILE"
+POLICY_PASS_BLOCK="$(sed -n '/^[[:space:]]*function policy\.PASS(state, _)[[:space:]]*$/,/^[[:space:]]*end[[:space:]]*$/p' "$POLICY_PASS_FILE")"
+if [[ "$(grep -Ec '^[[:space:]]*return nil[[:space:]]*$' <<< "$POLICY_PASS_BLOCK" || true)" != 1 ]] ||
+	grep -Eq '^[[:space:]]*return state[[:space:]]*$' <<< "$POLICY_PASS_BLOCK"
+then
+	echo 'Error: Knot Resolver policy.PASS patch verification failed'
+	exit 25
+fi
 
-# Загружаем и создаем списки исключений
-/root/antizapret/doall.sh noclear
-
-# Настраиваем сервера OpenVPN и WireGuard/AmneziaWG для первого запуска
-# Пересоздаем для всех существующих пользователей файлы подключений
-# Если пользователей нет, то создаем новых пользователей 'antizapret-client' для OpenVPN и WireGuard/AmneziaWG
-/root/antizapret/client.sh 7
-require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
+mark_dns6_runtime_ready
 
 # Включим обновляемые службы
 systemctl enable kresd@1
@@ -936,41 +2696,176 @@ if [[ "$BGP_ENABLE" == 'y' ]]; then
 	systemctl enable antizapret-bgp
 fi
 
-ERRORS=
+# Firewall first. Public VPN listeners are started only after antizapret is up.
+systemctl start kresd@1.service kresd@2.service
+systemctl start antizapret.service
+CORE_CUTOVER_UNITS=(kresd@1.service kresd@2.service antizapret.service)
+for unit in kresd.target kres-cache-gc.service; do
+	case "${INSTALL_TRANSACTION_ACTIVE[$unit]}" in
+		active|activating|reloading)
+			systemctl start "$unit"
+			CORE_CUTOVER_UNITS+=("$unit")
+			;;
+	esac
+done
+sleep 2
+for unit in "${CORE_CUTOVER_UNITS[@]}"; do
+	if ! systemctl is-active --quiet "$unit"; then
+		systemctl status --no-pager --full "$unit" || true
+		echo "Error: $unit did not stay active after cutover"
+		exit 23
+	fi
+done
+
+# Файрвол уже в строю; теперь сетевое обновление списков не оставляет хост голым.
+/root/antizapret/doall.sh noclear
+
+# Готовим серверные конфиги и пересоздаём клиентские профили.
+/root/antizapret/client.sh 7
+require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 if [[ "$OPENVPN_PATCH" != '0' ]]; then
-	if ! /root/antizapret/patch-openvpn.sh "$OPENVPN_PATCH"; then
-		ERRORS+="\n\e[1;31mAnti-censorship patch for OpenVPN has not installed!\e[0m Please run '/root/antizapret/patch-openvpn.sh' after rebooting\n"
-	fi
+	ANTIZAPRET_SETUP_RUN=y /root/antizapret/patch-openvpn.sh "$OPENVPN_PATCH"
 fi
 
 if [[ "$OPENVPN_DCO" == 'y' ]]; then
-	if ! /root/antizapret/openvpn-dco.sh y; then
-		ERRORS+="\n\e[1;31mOpenVPN DCO has not turn on!\e[0m Please run '/root/antizapret/openvpn-dco.sh y' after rebooting\n"
+	/root/antizapret/openvpn-dco.sh y
+fi
+
+# Новый runtime должен подняться до commit. Если любой unit падает, EXIT trap
+# вернёт прежнюю конфигурацию и состояние служб.
+CUTOVER_UNITS=("${CORE_CUTOVER_UNITS[@]}")
+CUTOVER_VPN_UNITS=()
+if [[ "$OPENVPN_UDP_ENABLE" == 'y' ]]; then
+	CUTOVER_VPN_UNITS+=(openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service)
+fi
+if [[ "$OPENVPN_TCP_ENABLE" == 'y' ]]; then
+	CUTOVER_VPN_UNITS+=(openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service)
+fi
+if [[ "$WIREGUARD_ENABLE" == 'y' ]]; then
+	CUTOVER_VPN_UNITS+=(wg-quick@antizapret.service wg-quick@vpn.service)
+fi
+if (( ${#CUTOVER_VPN_UNITS[@]} > 0 )); then
+	systemctl start "${CUTOVER_VPN_UNITS[@]}"
+	sleep 2
+	for unit in "${CUTOVER_VPN_UNITS[@]}"; do
+		if ! systemctl is-active --quiet "$unit"; then
+			systemctl status --no-pager --full "$unit" || true
+			echo "Error: $unit did not stay active before custom-up"
+			exit 23
+		fi
+	done
+	CUTOVER_UNITS+=("${CUTOVER_VPN_UNITS[@]}")
+fi
+
+# custom-up штатно видит уже поднятые VPN-интерфейсы. State и lock
+# не дают потерять парный custom-down при падении основного unit.
+(
+	# Пользовательский hook может оставить фоновый процесс. Он не должен
+	# унаследовать setup lock и заблокировать следующую установку.
+	exec {INSTALL_LOCK_FD}>&-
+	/root/antizapret/up.sh --complete-cutover
+)
+
+if [[ "$BGP_ENABLE" == 'y' ]]; then
+	systemctl start antizapret-bgp.service
+	CUTOVER_UNITS+=(antizapret-bgp.service)
+fi
+systemctl start antizapret-update.timer logrotate.timer
+CUTOVER_UNITS+=(antizapret-update.timer logrotate.timer)
+for unit in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service; do
+	case "${INSTALL_TRANSACTION_ACTIVE[$unit]}" in
+		active|activating|reloading)
+			systemctl start "$unit"
+			CUTOVER_UNITS+=("$unit")
+			;;
+	esac
+done
+
+sleep 2
+for unit in "${CUTOVER_UNITS[@]}"; do
+	if ! systemctl is-active --quiet "$unit"; then
+		systemctl status --no-pager --full "$unit" || true
+		echo "Error: $unit did not stay active after cutover"
+		exit 23
 	fi
-fi
+done
 
-# Если есть ошибки, выводим их
-if [[ -n "$ERRORS" ]]; then
-	echo -e "$ERRORS"
-fi
+for unit in \
+	openvpn-server@antizapret-udp.service openvpn-server@vpn-udp.service \
+	openvpn-server@antizapret-tcp.service openvpn-server@vpn-tcp.service \
+	wg-quick@antizapret.service wg-quick@vpn.service
+do
+	case " ${CUTOVER_UNITS[*]} " in
+		*" $unit "*) ;;
+		*)
+			if ! verify_install_unit_stopped "$unit"; then
+				echo "Error: Disabled VPN unit $unit is unexpectedly active"
+				exit 23
+			fi
+			;;
+	esac
+done
 
-# Создадим файл подкачки размером 1 Гб если его нет
-if [[ -z "$(swapon --show)" ]]; then
-	set +e
-	SWAPFILE=/swapfile
-	SWAPSIZE=1024
-	dd if=/dev/zero of=$SWAPFILE bs=1M count=$SWAPSIZE
-	chmod 600 $SWAPFILE
-	mkswap $SWAPFILE
-	swapon $SWAPFILE
-	echo $SWAPFILE none swap sw 0 0 >> /etc/fstab
+# Units are active; now verify addresses, listeners, firewall and local DNS.
+# This is the last fatal gate before the transaction is committed.
+validate_cutover_runtime
+
+# A guard left by a failed rollback is cleared only after the replacement
+# firewall and every requested tunnel passed the regular cutover checks.
+if ! remove_install_rollback_vpn_guard; then
+	echo 'Error: Cannot clear the installation rollback VPN guard'
+	exit 26
 fi
 
 # Перезагружаем
 echo
-[[ -n "$BACKUP_ARCHIVE" ]] && rm -f -- "$BACKUP_ARCHIVE"
+commit_install_transaction
+
+# Необязательная уборка и swap не должны откатывать уже проверенный VPN.
+if ! {
+	journalctl --vacuum-size=1B -q
+	find /var/log -name '*.gz' -delete
+	find /var/log -name '*.1' -delete
+	find /var/log -type f -exec truncate -s 0 {} +
+	[[ ! -d /etc/openvpn/server/logs ]] || find /etc/openvpn/server/logs -type f -exec truncate -s 0 {} +
+}; then
+	echo 'Warning: Cannot finish optional log cleanup'
+fi
+
+# Создадим swap только если его нет. Чужой /swapfile не трогаем.
+if [[ -z "$(swapon --show --noheadings)" ]]; then
+	if [[ -e /swapfile || -L /swapfile ]] || grep -Eq '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab; then
+		echo 'Warning: inactive /swapfile configuration already exists; leaving it unchanged'
+	else
+		SWAP_TEMP=
+		FSTAB_TEMP=
+		if SWAP_TEMP="$(mktemp /swapfile.antizapret.XXXXXX)" &&
+			FSTAB_TEMP="$(mktemp /etc/.fstab.antizapret.XXXXXX)" &&
+			dd if=/dev/zero of="$SWAP_TEMP" bs=1M count=1024 status=none &&
+			chmod 600 "$SWAP_TEMP" &&
+			mkswap "$SWAP_TEMP" >/dev/null &&
+			cp -a /etc/fstab "$FSTAB_TEMP" &&
+			printf '/swapfile none swap sw 0 0\n' >> "$FSTAB_TEMP" &&
+			mv -f -- "$SWAP_TEMP" /swapfile &&
+			swapon /swapfile &&
+			mv -f -- "$FSTAB_TEMP" /etc/fstab
+		then
+			:
+		else
+			swapoff /swapfile >/dev/null 2>&1 || true
+			rm -f -- /swapfile ${SWAP_TEMP:+"$SWAP_TEMP"} ${FSTAB_TEMP:+"$FSTAB_TEMP"}
+			echo 'Warning: Cannot create the optional swap file'
+		fi
+	fi
+fi
+
+if [[ -n "$BACKUP_ARCHIVE" ]] && ! rm -f -- "$BACKUP_ARCHIVE"; then
+	echo "Warning: Installation succeeded, but backup archive was not removed: $BACKUP_ARCHIVE"
+fi
 echo -e '\e[1;32mAntiZapret VPN + full VPN installed successfully!\e[0m'
 echo 'Rebooting...'
 
-reboot -f
+if ! reboot -f; then
+	echo 'Warning: Automatic reboot failed; the verified VPN services remain active'
+fi

@@ -3,6 +3,104 @@ exec 2>/dev/null
 
 cd /root/antizapret
 
+CUTOVER_HOOK_MARKER=/run/antizapret-setup.defer-custom-hooks
+CUTOVER_HOOK_ENV=/run/antizapret-setup.custom-hook.env
+CUTOVER_HOOK_LOCK=/run/antizapret-setup.custom-hook.lock
+CUTOVER_LOCK=/run/antizapret-setup.lock
+CUTOVER_RUN_CUSTOM_DOWN=y
+
+cutover_lock_active() {
+	local lock_fd
+
+	[[ -e "$CUTOVER_LOCK" ]] || return 1
+	if ! exec {lock_fd}>> "$CUTOVER_LOCK"; then
+		return 0
+	fi
+	if flock -n "$lock_fd"; then
+		flock -u "$lock_fd" >/dev/null 2>&1 || true
+		exec {lock_fd}>&-
+		return 1
+	fi
+	exec {lock_fd}>&-
+	return 0
+}
+
+write_cutover_hook_state() {
+	local state=$1 temporary
+
+	temporary="$(mktemp "${CUTOVER_HOOK_MARKER}.XXXXXX")" || return 1
+	if ! printf '%s\n' "$state" > "$temporary" ||
+		! chmod 600 "$temporary" ||
+		! chown root:root "$temporary" ||
+		! mv -f -- "$temporary" "$CUTOVER_HOOK_MARKER"
+	then
+		rm -f -- "$temporary"
+		return 1
+	fi
+}
+
+handle_cutover_hook_state() {
+	local hook_state install_active=n lock_fd=
+
+	[[ -f "$CUTOVER_HOOK_MARKER" ]] || return 0
+	if ! exec {lock_fd}>> "$CUTOVER_HOOK_LOCK"; then
+		echo 'Cannot open custom hook cutover lock' >&2
+		return 1
+	fi
+	chmod 600 "$CUTOVER_HOOK_LOCK" || return 1
+	flock "$lock_fd" || return 1
+
+	# Marker мог убрать commit, пока ждали custom-up.
+	if [[ ! -f "$CUTOVER_HOOK_MARKER" ]]; then
+		exec {lock_fd}>&-
+		return 0
+	fi
+	cutover_lock_active && install_active=y
+	hook_state="$(< "$CUTOVER_HOOK_MARKER")"
+	case "$hook_state" in
+		applied)
+			# custom-up был запущен. Во время установки фиксируем падение,
+			# чтобы restart не спрятал его от проверки setup.
+			if [[ "$install_active" == 'y' ]]; then
+				write_cutover_hook_state stopped || return 1
+				rm -f -- "$CUTOVER_HOOK_ENV"
+			else
+				rm -f -- "$CUTOVER_HOOK_MARKER" "$CUTOVER_HOOK_ENV" || return 1
+			fi
+			;;
+		deferred|ready)
+			CUTOVER_RUN_CUSTOM_DOWN=n
+			if [[ "$hook_state" == 'deferred' &&
+				"${ANTIZAPRET_INTERNAL_PRECLEANUP:-n}" == 'y' &&
+				"$install_active" == 'y' ]]
+			then
+				# up.sh чистит старые правила до нового custom-up.
+				:
+			elif [[ "$install_active" == 'y' ]]; then
+				# Unit остановлен до custom-up. Запрещаем поздний запуск hook
+				# на уже мёртвом runtime.
+				write_cutover_hook_state stopped || return 1
+			else
+				rm -f -- "$CUTOVER_HOOK_MARKER" "$CUTOVER_HOOK_ENV"
+			fi
+			;;
+		stopped)
+			CUTOVER_RUN_CUSTOM_DOWN=n
+			if [[ "$install_active" != 'y' ]]; then
+				rm -f -- "$CUTOVER_HOOK_MARKER" "$CUTOVER_HOOK_ENV"
+			fi
+			;;
+		*)
+			echo 'Invalid custom hook cutover state' >&2
+			exec {lock_fd}>&-
+			return 1
+			;;
+	esac
+	exec {lock_fd}>&-
+}
+
+handle_cutover_hook_state || exit 1
+
 source setup
 
 if [[ -z "$DEFAULT_INTERFACE" ]]; then
@@ -83,12 +181,16 @@ iptables -w -D INPUT -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow s
 while OPENVPN_SCANNER_RULE_NUMBER="$(iptables -w -L INPUT --line-numbers -n | awk '/antizapret-openvpn-scanner/ { print $1; exit }')" && [[ -n "$OPENVPN_SCANNER_RULE_NUMBER" ]]; do
 	iptables -w -D INPUT "$OPENVPN_SCANNER_RULE_NUMBER"
 done
+while OPENVPN_SCANNER_RULE_NUMBER6="$(ip6tables -w -L INPUT --line-numbers -n | awk '/antizapret-openvpn-scanner6/ { print $1; exit }')" && [[ -n "$OPENVPN_SCANNER_RULE_NUMBER6" ]]; do
+	ip6tables -w -D INPUT "$OPENVPN_SCANNER_RULE_NUMBER6"
+done
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 86400
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 3600
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -j SET --add-set antizapret-openvpn-scanner src --exist
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -p tcp -m multiport --dports 50443,50080 -m set --match-set antizapret-openvpn-scanner src -j DROP
 if [[ "${ATTACK_PROTECTION:-n}" != 'y' || "${OPENVPN_TCP_ENABLE:-n}" != 'y' ]]; then
 	ipset destroy antizapret-openvpn-scanner
+	ipset destroy antizapret-openvpn-scanner6
 fi
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
 iptables -w -D INPUT -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
@@ -178,5 +280,7 @@ if ip link show dev $WARP_VPN_INTERFACE &>/dev/null; then
 	ip link delete dev $WARP_VPN_INTERFACE
 fi
 
-./custom-down.sh
+if [[ "$CUTOVER_RUN_CUSTOM_DOWN" == 'y' ]]; then
+	./custom-down.sh
+fi
 exit 0

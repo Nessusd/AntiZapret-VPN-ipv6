@@ -10,6 +10,12 @@ export DISABLE_IPV6 VPN_IPV6_PREFIX BGP_ENABLE
 DISABLE_IPV6="${DISABLE_IPV6:-n}"
 ANTIZAPRET_IPV6_IN_INTERFACE="${ANTIZAPRET_IPV6_IN_INTERFACE:-antizapret+}"
 VPN_IPV6_IN_INTERFACE="${VPN_IPV6_IN_INTERFACE:-vpn+}"
+ANTIZAPRET_UDP_IPV6_IN_INTERFACE="${ANTIZAPRET_UDP_IPV6_IN_INTERFACE:-antizapret-udp}"
+ANTIZAPRET_TCP_IPV6_IN_INTERFACE="${ANTIZAPRET_TCP_IPV6_IN_INTERFACE:-antizapret-tcp}"
+ANTIZAPRET_WG_IPV6_IN_INTERFACE="${ANTIZAPRET_WG_IPV6_IN_INTERFACE:-antizapret}"
+VPN_UDP_IPV6_IN_INTERFACE="${VPN_UDP_IPV6_IN_INTERFACE:-vpn-udp}"
+VPN_TCP_IPV6_IN_INTERFACE="${VPN_TCP_IPV6_IN_INTERFACE:-vpn-tcp}"
+VPN_WG_IPV6_IN_INTERFACE="${VPN_WG_IPV6_IN_INTERFACE:-vpn}"
 
 if [[ -z "${DEFAULT_INTERFACE:-}" ]]; then
 	DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+' || true)"
@@ -83,6 +89,26 @@ if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
 print(ipaddress.IPv6Network((int(prefix.network_address) | (0x29FF << 64), 96)))
 PY
 )"
+mapfile -t DEFAULT_DNS6_GATEWAYS < <(python3 - "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" <<'PY'
+import ipaddress
+import sys
+
+prefix = ipaddress.ip_network(sys.argv[1], strict=True)
+if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:
+    raise SystemExit("VPN_IPV6_PREFIX must be an IPv6 /48 network")
+if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
+    raise SystemExit("VPN_IPV6_PREFIX must be a private ULA /48 network")
+
+for subnet_id in (0x2900, 0x2904, 0x2908, 0x2800, 0x2804, 0x2808):
+    print(ipaddress.ip_address(int(prefix.network_address) | (subnet_id << 64) | 1))
+PY
+)
+ANTIZAPRET_UDP_DNS6="${ANTIZAPRET_UDP_DNS6:-${DEFAULT_DNS6_GATEWAYS[0]}}"
+ANTIZAPRET_TCP_DNS6="${ANTIZAPRET_TCP_DNS6:-${DEFAULT_DNS6_GATEWAYS[1]}}"
+ANTIZAPRET_WG_DNS6="${ANTIZAPRET_WG_DNS6:-${DEFAULT_DNS6_GATEWAYS[2]}}"
+VPN_UDP_DNS6="${VPN_UDP_DNS6:-${DEFAULT_DNS6_GATEWAYS[3]}}"
+VPN_TCP_DNS6="${VPN_TCP_DNS6:-${DEFAULT_DNS6_GATEWAYS[4]}}"
+VPN_WG_DNS6="${VPN_WG_DNS6:-${DEFAULT_DNS6_GATEWAYS[5]}}"
 
 ip6t() { ip6tables -w "$@"; }
 
@@ -113,6 +139,9 @@ firewall_down() {
 	delete_chain nat "$PREROUTING_CHAIN"
 	delete_chain nat "$POSTROUTING_CHAIN"
 	ipset destroy antizapret-torrent6 2>/dev/null
+	if [[ "${ATTACK_PROTECTION:-n}" != 'y' || "${OPENVPN_TCP_ENABLE:-n}" != 'y' || "${DISABLE_IPV6:-n}" == 'y' ]]; then
+		ipset destroy antizapret-openvpn-scanner6 2>/dev/null
+	fi
 	set -e
 }
 
@@ -155,6 +184,13 @@ redirect_ports() {
 		source=${pair%%:*}
 		destination=${pair##*:}
 		ip6t -t nat -A "$PREROUTING_CHAIN" -i "$PUBLIC_INTERFACE6" -p "$protocol" --dport "$source" -j REDIRECT --to-ports "$destination"
+	done
+}
+
+add_dns6_dnat() {
+	local interface=$1 destination=$2 protocol
+	for protocol in udp tcp; do
+		ip6t -t nat -A "$PREROUTING_CHAIN" -i "$interface" -p "$protocol" --dport 53 -j DNAT --to-destination "$destination"
 	done
 }
 

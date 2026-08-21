@@ -4,7 +4,113 @@ shopt -s nullglob
 
 cd /root/antizapret
 
-./down.sh
+CUTOVER_HOOK_MARKER=/run/antizapret-setup.defer-custom-hooks
+CUTOVER_HOOK_ENV=/run/antizapret-setup.custom-hook.env
+CUTOVER_HOOK_LOCK=/run/antizapret-setup.custom-hook.lock
+CUTOVER_LOCK=/run/antizapret-setup.lock
+
+cutover_lock_active() {
+	local lock_fd
+
+	[[ -e "$CUTOVER_LOCK" ]] || return 1
+	if ! exec {lock_fd}>> "$CUTOVER_LOCK"; then
+		return 0
+	fi
+	if flock -n "$lock_fd"; then
+		flock -u "$lock_fd" >/dev/null 2>&1 || true
+		exec {lock_fd}>&-
+		return 1
+	fi
+	exec {lock_fd}>&-
+	return 0
+}
+
+save_cutover_hook_environment() {
+	local temporary
+
+	temporary="$(mktemp "${CUTOVER_HOOK_ENV}.XXXXXX")"
+	if ! export -p > "$temporary" ||
+		! chmod 600 "$temporary" ||
+		! chown root:root "$temporary" ||
+		! mv -f -- "$temporary" "$CUTOVER_HOOK_ENV"
+	then
+		rm -f -- "$temporary"
+		return 1
+	fi
+}
+
+write_cutover_hook_state() {
+	local state=$1 temporary
+
+	temporary="$(mktemp "${CUTOVER_HOOK_MARKER}.XXXXXX")"
+	if ! printf '%s\n' "$state" > "$temporary" ||
+		! chmod 600 "$temporary" ||
+		! chown root:root "$temporary" ||
+		! mv -f -- "$temporary" "$CUTOVER_HOOK_MARKER"
+	then
+		rm -f -- "$temporary"
+		return 1
+	fi
+}
+
+if [[ "${1:-}" == '--complete-cutover' ]]; then
+	(
+		CUTOVER_HOOK_LOCK_FD=
+		if ! exec {CUTOVER_HOOK_LOCK_FD}>> "$CUTOVER_HOOK_LOCK"; then
+			echo 'Cannot open custom hook cutover lock' >&2
+			exit 1
+		fi
+		chmod 600 "$CUTOVER_HOOK_LOCK"
+		flock "$CUTOVER_HOOK_LOCK_FD"
+
+		if [[ -f "$CUTOVER_HOOK_MARKER" ]] && ! cutover_lock_active; then
+			case "$(< "$CUTOVER_HOOK_MARKER")" in
+				deferred|ready|applied|stopped)
+					rm -f -- "$CUTOVER_HOOK_MARKER" "$CUTOVER_HOOK_ENV"
+					echo 'Custom hook cutover is stale' >&2
+					exit 1
+					;;
+				*)
+					echo 'Invalid custom hook cutover state' >&2
+					exit 1
+					;;
+			esac
+		fi
+		if [[ ! -f "$CUTOVER_HOOK_MARKER" ]]; then
+			echo 'Custom hooks are not deferred' >&2
+			exit 1
+		fi
+		if [[ "$(< "$CUTOVER_HOOK_MARKER")" != 'ready' ]] || [[ ! -f "$CUTOVER_HOOK_ENV" ]]; then
+			echo 'Custom-up cannot be completed in the current cutover state' >&2
+			exit 1
+		fi
+
+		# applied означает, что custom-down уже обязателен. ExecStopPost
+		# дождётся этого lock, если основной unit упадёт прямо во время hook.
+		write_cutover_hook_state applied
+		source "$CUTOVER_HOOK_ENV"
+		rm -f -- "$CUTOVER_HOOK_ENV"
+		(
+			# Фоновый процесс из custom-up не должен держать cutover lock.
+			exec {CUTOVER_HOOK_LOCK_FD}>&-
+			./custom-up.sh
+		)
+	)
+	exit 0
+elif (( $# != 0 )); then
+	echo "Unsupported argument: $1" >&2
+	exit 1
+fi
+
+# Это внутренняя уборка перед применением новых правил. При install-cutover
+# marker=deferred ещё не означает падение службы.
+if [[ -f "$CUTOVER_HOOK_MARKER" ]] &&
+	[[ "$(< "$CUTOVER_HOOK_MARKER")" == 'deferred' ]] && cutover_lock_active
+then
+	ANTIZAPRET_INTERNAL_PRECLEANUP=y ./down.sh
+else
+	./down.sh
+fi
 
 source setup
 
@@ -12,6 +118,7 @@ load_openvpn_tcp_ports() {
 	local config proto port server_dir
 	server_dir="${OPENVPN_SERVER_DIR:-/etc/openvpn/server}"
 	OPENVPN_TCP_PORTS=
+	OPENVPN_TCP6_PORTS=
 	for config in \
 		"$server_dir/antizapret-tcp.conf" \
 		"$server_dir/vpn-tcp.conf"; do
@@ -27,6 +134,14 @@ load_openvpn_tcp_ports() {
 		case ",$OPENVPN_TCP_PORTS," in
 			*",$port,"*) ;;
 			*) OPENVPN_TCP_PORTS="${OPENVPN_TCP_PORTS:+$OPENVPN_TCP_PORTS,}$port" ;;
+		esac
+		case "$proto" in
+			tcp6|tcp6-server)
+				case ",$OPENVPN_TCP6_PORTS," in
+					*",$port,"*) ;;
+					*) OPENVPN_TCP6_PORTS="${OPENVPN_TCP6_PORTS:+$OPENVPN_TCP6_PORTS,}$port" ;;
+				esac
+				;;
 		esac
 	done
 	if [[ -z "$OPENVPN_TCP_PORTS" ]]; then
@@ -321,6 +436,9 @@ if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' ]]; then
 		load_openvpn_tcp_ports
 		ipset create antizapret-openvpn-scanner hash:ip timeout 86400 -exist
+		if [[ "${DISABLE_IPV6:-n}" != 'y' && -n "$OPENVPN_TCP6_PORTS" ]]; then
+			ipset create antizapret-openvpn-scanner6 hash:ip family inet6 timeout 86400 -exist
+		fi
 		# Обычный OpenVPN TCP-кадр начинается с двухбайтовой длины пакета. Значение
 		# 0x1603 вместо неё отправляют HTTPS/TLS-сканеры в начале TLS ClientHello.
 		iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP_PORTS" -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -m comment --comment antizapret-openvpn-scanner-detect -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 86400
@@ -341,10 +459,26 @@ if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 	ipset create antizapret-block6 hash:ip timeout 600 family inet6 -exist
 	ipset create antizapret-watch6 hash:ip,port timeout 600 family inet6 -exist
 	ip6tables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow6 src -j ACCEPT
-	ip6tables -w -I INPUT 3 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch6 src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-scan6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
-	ip6tables -w -I INPUT 4 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
-	ip6tables -w -I INPUT 5 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block6 src -j DROP
-	ip6tables -w -I INPUT 6 -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch6 src,dst --exist
+	IPV6_ATTACK_INPUT_RULE=3
+	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' && "${DISABLE_IPV6:-n}" != 'y' && -n "$OPENVPN_TCP6_PORTS" ]]; then
+		# u32 ниже считает TCP сразу после IPv6. Необычные extension headers
+		# запоминаем как тот же сканер; следующее set-правило сразу его отбросит.
+		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m conntrack --ctstate ESTABLISHED -m ipv6header ! --header prot -m comment --comment antizapret-openvpn-scanner6-extension-detect -j SET --add-set antizapret-openvpn-scanner6 src --exist --timeout 86400
+		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m conntrack --ctstate ESTABLISHED -m u32 --u32 '52>>26&0x3C@40>>16&0xFFFF=0x1603' -m comment --comment antizapret-openvpn-scanner6-detect -j SET --add-set antizapret-openvpn-scanner6 src --exist --timeout 86400
+		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m set --match-set antizapret-openvpn-scanner6 src -m comment --comment antizapret-openvpn-scanner6-drop -j DROP
+		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+	else
+		ipset destroy antizapret-openvpn-scanner6 2>/dev/null || true
+	fi
+	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch6 src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-scan6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
+	IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
+	IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set --match-set antizapret-block6 src -j DROP
+	IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
+	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -j SET --add-set antizapret-watch6 src,dst --exist
 fi
 # Scan protection
 if [[ "$SCAN_PROTECTION" == 'y' ]]; then
@@ -383,27 +517,29 @@ ip6tables -w -t raw -A OUTPUT -o lo -j NOTRACK
 
 # nat
 # OpenVPN TCP port redirection for backup connections
-if [[ "$OPENVPN_BACKUP_TCP" == 'y' ]]; then
+if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' && "${OPENVPN_BACKUP_TCP:-n}" == 'y' ]]; then
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 80 -j REDIRECT --to-ports 50080
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 443 -j REDIRECT --to-ports 50443
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 504 -j REDIRECT --to-ports 50443
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p tcp --dport 508 -j REDIRECT --to-ports 50080
 fi
 # OpenVPN UDP port redirection for backup connections
-if [[ "$OPENVPN_BACKUP_UDP" == 'y' ]]; then
+if [[ "${OPENVPN_UDP_ENABLE:-n}" == 'y' && "${OPENVPN_BACKUP_UDP:-n}" == 'y' ]]; then
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 80 -j REDIRECT --to-ports 50080
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 443 -j REDIRECT --to-ports 50443
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 504 -j REDIRECT --to-ports 50443
 	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 508 -j REDIRECT --to-ports 50080
 fi
 # WireGuard/AmneziaWG port redirection for backup connections
-if [[ "$WIREGUARD_BACKUP" == 'y' ]]; then
-	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 540 -j REDIRECT --to-ports 51443
-	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 580 -j REDIRECT --to-ports 51080
+if [[ "${WIREGUARD_ENABLE:-n}" == 'y' ]]; then
+	if [[ "${WIREGUARD_BACKUP:-n}" == 'y' ]]; then
+		iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 540 -j REDIRECT --to-ports 51443
+		iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 580 -j REDIRECT --to-ports 51080
+	fi
+	# AmneziaWG redirection ports to WireGuard
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52080 -j REDIRECT --to-ports 51080
+	iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52443 -j REDIRECT --to-ports 51443
 fi
-# AmneziaWG redirection ports to WireGuard
-iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52080 -j REDIRECT --to-ports 51080
-iptables -w -t nat -A PREROUTING -i $DEFAULT_INTERFACE -p udp --dport 52443 -j REDIRECT --to-ports 51443
 # AntiZapret DNS redirection to Knot Resolver
 iptables -w -t nat -A PREROUTING -s $IP.29.0.0/16 -p udp --dport 53 -j DNAT --to-destination 127.1.1.1
 iptables -w -t nat -A PREROUTING -s $IP.29.0.0/16 -p tcp --dport 53 -j DNAT --to-destination 127.1.1.1
@@ -470,5 +606,23 @@ if [[ "${BGP_ENABLE:-n}" == 'y' ]] && systemctl is-active --quiet antizapret-bgp
 	./bgp-firewall.sh up
 fi
 
-./custom-up.sh
+if [[ ! -f "$CUTOVER_HOOK_MARKER" ]]; then
+	./custom-up.sh
+else
+	case "$(< "$CUTOVER_HOOK_MARKER")" in
+		deferred)
+			save_cutover_hook_environment
+			write_cutover_hook_state ready
+			;;
+		ready|applied) ;;
+		stopped)
+			echo 'Custom hook cutover was stopped' >&2
+			exit 1
+			;;
+		*)
+			echo 'Invalid custom hook cutover state' >&2
+			exit 1
+			;;
+	esac
+fi
 exit 0

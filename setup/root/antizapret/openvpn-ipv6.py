@@ -18,21 +18,39 @@ DEFAULT_PREFIX = "fd3a:c9bc:6bcb::/48"
 
 class Mode(NamedTuple):
     subnet_id: int
-    legacy_proto: str
-    dual_proto: str
+    ipv4_proto: str
+    neutral_proto: str
+    ipv6_proto: str
     full_vpn: bool
+
+    @property
+    def managed_protos(self) -> frozenset[str]:
+        return frozenset((self.ipv4_proto, self.neutral_proto, self.ipv6_proto))
 
 
 MODES = {
-    "antizapret-udp": Mode(0x2900, "udp4", "udp", False),
-    "antizapret-tcp": Mode(0x2904, "tcp4", "tcp-server", False),
-    "vpn-udp": Mode(0x2800, "udp4", "udp", True),
-    "vpn-tcp": Mode(0x2804, "tcp4", "tcp-server", True),
+    "antizapret-udp": Mode(0x2900, "udp4", "udp", "udp6", False),
+    "antizapret-tcp": Mode(0x2904, "tcp4", "tcp-server", "tcp6-server", False),
+    "vpn-udp": Mode(0x2800, "udp4", "udp", "udp6", True),
+    "vpn-tcp": Mode(0x2804, "tcp4", "tcp-server", "tcp6-server", True),
 }
+
+# OpenVPN accepts both spellings in server mode.  The repository historically
+# used ``tcp4``, while some existing installations may contain the explicit
+# ``tcp4-server`` form.
+TCP_SERVER_COMPAT_PROTOS = frozenset(("tcp4-server",))
 
 
 class ReconcileError(RuntimeError):
     """A config cannot be changed without risking compatibility."""
+
+
+def directive_tokens(line: str) -> tuple[str, ...]:
+    """Return active OpenVPN directive tokens without an inline comment."""
+    content = line
+    for marker in ("#", ";"):
+        content = content.split(marker, 1)[0]
+    return tuple(content.split())
 
 
 def parse_prefix(value: str) -> ipaddress.IPv6Network:
@@ -68,23 +86,43 @@ def reconcile_text(
     lines = text.splitlines(keepends=True)
     changes = 0
 
-    proto_lines = [index for index, line in enumerate(lines) if line.startswith("proto ")]
+    parsed_lines = [directive_tokens(line) for line in lines]
+    proto_lines = [
+        index for index, tokens in enumerate(parsed_lines) if tokens[:1] == ("proto",)
+    ]
     server_lines = [
-        index for index, line in enumerate(lines) if line.startswith("server ")
+        index for index, tokens in enumerate(parsed_lines) if tokens[:1] == ("server",)
     ]
     if len(proto_lines) != 1 or len(server_lines) != 1:
         raise ReconcileError(f"{name}: expected exactly one proto and one IPv4 server")
 
     proto_index = proto_lines[0]
     newline = "\r\n" if lines[proto_index].endswith("\r\n") else "\n"
-    current_proto = lines[proto_index].strip().split(maxsplit=1)[1]
-    source_proto = mode.legacy_proto if enable else mode.dual_proto
-    target_proto = mode.dual_proto if enable else mode.legacy_proto
-    if current_proto == source_proto:
+    proto_tokens = parsed_lines[proto_index]
+    if len(proto_tokens) != 2:
+        raise ReconcileError(f"{name}: malformed proto directive")
+    current_proto = proto_tokens[1].lower()
+    managed_protos = mode.managed_protos
+    if mode.neutral_proto == "tcp-server":
+        managed_protos = managed_protos | TCP_SERVER_COMPAT_PROTOS
+    if current_proto not in managed_protos:
+        raise ReconcileError(f"{name}: unmanaged proto value {current_proto!r}")
+
+    target_proto = mode.ipv6_proto if enable else mode.ipv4_proto
+    if current_proto != target_proto:
         lines[proto_index] = f"proto {target_proto}{newline}"
         changes += 1
-    elif current_proto != target_proto:
-        raise ReconcileError(f"{name}: unmanaged proto value {current_proto!r}")
+
+    if any(directive_tokens(line)[:2] == ("bind", "ipv6only") for line in lines):
+        raise ReconcileError(
+            f"{name}: bind ipv6only would reject existing IPv4 clients"
+        )
+
+    if enable and any(tokens[:1] == ("local",) for tokens in parsed_lines):
+        raise ReconcileError(
+            f"{name}: local bind is incompatible with the managed dual-stack listener; "
+            "remove the local directive"
+        )
 
     managed_server_indexes = [
         index for index, line in enumerate(lines) if line.strip() == managed_server
@@ -92,11 +130,13 @@ def reconcile_text(
     other_server_ipv6 = [
         line.strip()
         for line in lines
-        if line.startswith("server-ipv6 ") and line.strip() != managed_server
+        if line.lstrip().startswith("server-ipv6 ") and line.strip() != managed_server
     ]
+    if len(managed_server_indexes) > 1:
+        raise ReconcileError(f"{name}: duplicate managed server-ipv6 directives")
+    if other_server_ipv6:
+        raise ReconcileError(f"{name}: unmanaged server-ipv6 is already configured")
     if enable:
-        if other_server_ipv6:
-            raise ReconcileError(f"{name}: unmanaged server-ipv6 is already configured")
         if not managed_server_indexes:
             insert_at = server_lines[0] + 1
             server_newline = "\r\n" if lines[server_lines[0]].endswith("\r\n") else "\n"
@@ -110,6 +150,8 @@ def reconcile_text(
         redirect_indexes = [
             index for index, line in enumerate(lines) if line.strip() == managed_redirect
         ]
+        if len(redirect_indexes) > 1:
+            raise ReconcileError(f"{name}: duplicate IPv6 redirect-gateway pushes")
         if enable and not redirect_indexes:
             ipv4_redirect = next(
                 (

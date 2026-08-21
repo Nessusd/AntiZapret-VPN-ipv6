@@ -201,10 +201,38 @@ setServerHost_FileName(){
 	else
 		SERVER_HOST="$1"
 	fi
+	# OpenVPN expects an IPv6 literal without URI brackets.  WireGuard templates
+	# prepare their Endpoint value separately.
+	if [[ "$SERVER_HOST" == \[*\] ]]; then
+		SERVER_HOST="${SERVER_HOST#[}"
+		SERVER_HOST="${SERVER_HOST%]}"
+	fi
 
 	FILE_NAME="${CLIENT_NAME#antizapret-}"
 	FILE_NAME="${FILE_NAME#vpn-}"
-	FILE_NAME="${FILE_NAME}-(${SERVER_HOST})"
+	FILE_NAME="${FILE_NAME}-(${SERVER_HOST//:/_})"
+}
+
+prepareWireGuardServerHost(){
+	local ipv4
+
+	WIREGUARD_SERVER_HOST="$SERVER_HOST"
+	if [[ "${DISABLE_IPV6:-n}" == 'y' ]]; then
+		# WireGuard has no udp4 switch. Pin the configured public hostname to
+		# its A record so an added AAAA cannot break an IPv4-only installation.
+		if [[ -n "${WIREGUARD_HOST:-}" ]]; then
+			ipv4="$(getent ahostsv4 "$SERVER_HOST" 2>/dev/null | awk 'NF && $1 !~ /:/ && !seen[$1]++ { print $1; exit }')"
+			if [[ -z "$ipv4" ]]; then
+				echo "WireGuard/AmneziaWG endpoint $SERVER_HOST has no IPv4 address"
+				exit 14
+			fi
+			WIREGUARD_SERVER_HOST="$ipv4"
+		else
+			WIREGUARD_SERVER_HOST="$SERVER_IP"
+		fi
+	elif [[ "$WIREGUARD_SERVER_HOST" == *:* ]]; then
+		WIREGUARD_SERVER_HOST="[$WIREGUARD_SERVER_HOST]"
+	fi
 }
 
 render() {
@@ -257,7 +285,7 @@ prepareWireGuardRouteMode(){
 			WIREGUARD_ALLOWED_IPS+=', ::/0'
 			WIREGUARD_CLIENT_IPV6="${WIREGUARD_CLIENT_IPV6%/128}/64"
 		fi
-		WIREGUARD_TABLE=$'\nTable = off'
+		WIREGUARD_TABLE='Table = off'
 	else
 		WIREGUARD_ALLOWED_IPS="$client_base.29.8.0/24${WIREGUARD_IPV6_ROUTES}${IPS}"
 	fi
@@ -341,6 +369,16 @@ migrateOpenVPNIPv6(){
 	done
 }
 
+prepareOpenVPNClientTransport(){
+	if [[ "${DISABLE_IPV6:-n}" == 'y' ]]; then
+		OPENVPN_UDP_PROTO=udp4
+		OPENVPN_TCP_PROTO=tcp4
+	else
+		OPENVPN_UDP_PROTO=udp
+		OPENVPN_TCP_PROTO=tcp
+	fi
+}
+
 initOpenVPN(){
 	mkdir -p /etc/openvpn/easyrsa3
 	mkdir -p /etc/openvpn/server/ccd
@@ -365,6 +403,7 @@ initOpenVPN(){
 
 addOpenVPN(){
 	setServerHost_FileName "$OPENVPN_HOST"
+	prepareOpenVPNClientTransport
 
 	if [[ ! -f /etc/openvpn/easyrsa3/pki/issued/"$CLIENT_NAME".crt ]] || \
 	   [[ ! -f /etc/openvpn/easyrsa3/pki/private/"$CLIENT_NAME".key ]]; then
@@ -459,6 +498,7 @@ PUBLIC_KEY=${PUBLIC_KEY}" > /etc/wireguard/key
 
 addWireGuard(){
 	setServerHost_FileName "$WIREGUARD_HOST"
+	prepareWireGuardServerHost
 	echo
 	migrateWireGuardIPv6
 

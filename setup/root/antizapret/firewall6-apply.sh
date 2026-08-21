@@ -16,6 +16,20 @@ firewall_up() {
 	ip6t -t mangle -I PREROUTING 1 -j "$MARK_CHAIN"
 	ip6t -t nat -I PREROUTING 1 -j "$PREROUTING_CHAIN"
 	ip6t -t nat -I POSTROUTING 1 -j "$POSTROUTING_CHAIN"
+
+	# Old installations receive firewall updates through doall.sh too.  Enable
+	# DNS interception only after setup has installed and checked the matching
+	# Knot Resolver configuration.
+	if [[ -f "${DNS6_RUNTIME_MARKER:-$ROOT_DIR/state/dns6-ready}" ]]; then
+		add_dns6_dnat "$ANTIZAPRET_UDP_IPV6_IN_INTERFACE" "$ANTIZAPRET_UDP_DNS6"
+		add_dns6_dnat "$ANTIZAPRET_TCP_IPV6_IN_INTERFACE" "$ANTIZAPRET_TCP_DNS6"
+		add_dns6_dnat "$ANTIZAPRET_WG_IPV6_IN_INTERFACE" "$ANTIZAPRET_WG_DNS6"
+		if [[ "${VPN_DNS:-1}" == '1' ]]; then
+			add_dns6_dnat "$VPN_UDP_IPV6_IN_INTERFACE" "$VPN_UDP_DNS6"
+			add_dns6_dnat "$VPN_TCP_IPV6_IN_INTERFACE" "$VPN_TCP_DNS6"
+			add_dns6_dnat "$VPN_WG_IPV6_IN_INTERFACE" "$VPN_WG_DNS6"
+		fi
+	fi
 	ip6t -t nat -A "$PREROUTING_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -d "$FAKE_IPV6_NETWORK" -j "$MAPPING_CHAIN"
 
 	if [[ -n "$PUBLIC_INTERFACE6" ]]; then
@@ -59,12 +73,18 @@ firewall_up() {
 	ip6t -t mangle -A "$MARK_CHAIN" -i "$ANTIZAPRET_IPV6_IN_INTERFACE" -j MARK --set-xmark "$ANTIZAPRET_MARK"
 	ip6t -t mangle -A "$MARK_CHAIN" -i "$VPN_IPV6_IN_INTERFACE" -j MARK --set-xmark "$VPN_MARK"
 
-	# OpenVPN currently uses IPv4 transport, but mirrored redirects keep the firewall
-	# ready for dual-stack listeners. WireGuard/AmneziaWG already use dual-stack UDP.
-	[[ "${OPENVPN_BACKUP_TCP:-n}" == 'y' ]] && redirect_ports tcp 80:50080 443:50443 504:50443 508:50080
-	[[ "${OPENVPN_BACKUP_UDP:-n}" == 'y' ]] && redirect_ports udp 80:50080 443:50443 504:50443 508:50080
-	[[ "${WIREGUARD_BACKUP:-n}" == 'y' ]] && redirect_ports udp 540:51443 580:51080
-	redirect_ports udp 52080:51080 52443:51443
+	# Mirror the public IPv4 backup-port redirects on the IPv6 listener.
+	# WireGuard and AmneziaWG use the same dual-stack UDP sockets.
+	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' && "${OPENVPN_BACKUP_TCP:-n}" == 'y' ]]; then
+		redirect_ports tcp 80:50080 443:50443 504:50443 508:50080
+	fi
+	if [[ "${OPENVPN_UDP_ENABLE:-n}" == 'y' && "${OPENVPN_BACKUP_UDP:-n}" == 'y' ]]; then
+		redirect_ports udp 80:50080 443:50443 504:50443 508:50080
+	fi
+	if [[ "${WIREGUARD_ENABLE:-n}" == 'y' ]]; then
+		[[ "${WIREGUARD_BACKUP:-n}" == 'y' ]] && redirect_ports udp 540:51443 580:51080
+		redirect_ports udp 52080:51080 52443:51443
+	fi
 
 	add_nat66 "$ANTIZAPRET_MARK" "$ANTIZAPRET_IPV6_OUT_INTERFACE" "$ANTIZAPRET_IPV6_OUT_IP"
 	add_nat66 "$VPN_MARK" "$VPN_IPV6_OUT_INTERFACE" "$VPN_IPV6_OUT_IP"
