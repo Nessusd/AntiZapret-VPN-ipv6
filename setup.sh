@@ -9,23 +9,28 @@ export LC_ALL=C
 set_vpn_key_permissions() {
 	local easyrsa_dir=$1
 	local wireguard_dir=$2
+	local pki_dir
 	local private_dir
 
-	for private_dir in \
-		"$easyrsa_dir/pki/private" \
-		"$easyrsa_dir/pki/inline" \
-		"$easyrsa_dir/pki/renewed/private" \
-		"$easyrsa_dir/pki/renewed/private_by_serial" \
-		"$easyrsa_dir/pki/revoked/private" \
-		"$easyrsa_dir/pki/revoked/private_by_serial"
-	do
-		[[ -d "$private_dir" ]] || continue
-		find "$private_dir" -type d -exec chmod 700 {} + || return 1
-		find "$private_dir" -type f -exec chmod 600 {} + || return 1
+	# Some old backups contain the PKI both directly in easyrsa3 and in pki/.
+	# Keep both layouts private while they pass through restore staging.
+	for pki_dir in "$easyrsa_dir" "$easyrsa_dir/pki"; do
+		for private_dir in \
+			"$pki_dir/private" \
+			"$pki_dir/inline" \
+			"$pki_dir/renewed/private" \
+			"$pki_dir/renewed/private_by_serial" \
+			"$pki_dir/revoked/private" \
+			"$pki_dir/revoked/private_by_serial"
+		do
+			[[ -d "$private_dir" ]] || continue
+			find "$private_dir" -type d -exec chmod 700 {} + || return 1
+			find "$private_dir" -type f -exec chmod 600 {} + || return 1
+		done
+		if [[ -d "$pki_dir" ]]; then
+			find "$pki_dir" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
+		fi
 	done
-	if [[ -d "$easyrsa_dir/pki" ]]; then
-		find "$easyrsa_dir/pki" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
-	fi
 	if [[ -d "$wireguard_dir" ]]; then
 		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
 		find "$wireguard_dir" -type f -exec chmod 600 {} + || return 1
@@ -1328,6 +1333,7 @@ set_dns_directives() {
 	local kind=$1 path=$2
 	shift 2
 	python3 - "$kind" "$path" "$@" <<'PY'
+import ipaddress
 import os
 import stat
 import sys
@@ -1345,9 +1351,15 @@ lines = original.splitlines(keepends=True)
 if kind == "openvpn":
     def managed(line: str) -> bool:
         value = line.strip()
-        return value.startswith('push "dhcp-option DNS ') and value.endswith('"')
+        return (
+            value.startswith('push "dhcp-option DNS ')
+            or value.startswith('push "dhcp-option DNS6 ')
+        ) and value.endswith('"')
 
-    replacement = [f'push "dhcp-option DNS {address}"\n' for address in addresses]
+    replacement = []
+    for address in addresses:
+        option = "DNS6" if ipaddress.ip_address(address).version == 6 else "DNS"
+        replacement.append(f'push "dhcp-option {option} {address}"\n')
 elif kind == "wireguard":
     def managed(line: str) -> bool:
         return line.strip().startswith("DNS =")
@@ -2452,7 +2464,14 @@ mkdir -p /var/cache/knot-resolver2
 
 # Выставляем разрешения
 find /tmp/antizapret \
-	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
+	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/inline -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/revoked/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/revoked/private_by_serial -o \
+	   -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/private -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/inline -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private -o \
@@ -2462,7 +2481,14 @@ find /tmp/antizapret \
 	   -path /tmp/antizapret/setup/etc/wireguard \) -prune -o \
 	-type f -exec chmod 644 {} +
 find /tmp/antizapret \
-	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
+	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/inline -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private_by_serial -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/revoked/private -o \
+	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/revoked/private_by_serial -o \
+	   -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/*.creds' -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/private -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/inline -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/pki/renewed/private -o \

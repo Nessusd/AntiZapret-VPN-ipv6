@@ -58,23 +58,28 @@ OPENVPN_LISTS_HELPER="${OPENVPN_LISTS_HELPER:-/root/antizapret/firewall6-lists.p
 set_vpn_key_permissions() {
 	local easyrsa_dir=$1
 	local wireguard_dir=$2
+	local pki_dir
 	local private_dir
 
-	for private_dir in \
-		"$easyrsa_dir/pki/private" \
-		"$easyrsa_dir/pki/inline" \
-		"$easyrsa_dir/pki/renewed/private" \
-		"$easyrsa_dir/pki/renewed/private_by_serial" \
-		"$easyrsa_dir/pki/revoked/private" \
-		"$easyrsa_dir/pki/revoked/private_by_serial"
-	do
-		[[ -d "$private_dir" ]] || continue
-		find "$private_dir" -type d -exec chmod 700 {} + || return 1
-		find "$private_dir" -type f -exec chmod 600 {} + || return 1
+	# Some old backups contain the PKI both directly in easyrsa3 and in pki/.
+	# Keep both layouts private while they pass through restore staging.
+	for pki_dir in "$easyrsa_dir" "$easyrsa_dir/pki"; do
+		for private_dir in \
+			"$pki_dir/private" \
+			"$pki_dir/inline" \
+			"$pki_dir/renewed/private" \
+			"$pki_dir/renewed/private_by_serial" \
+			"$pki_dir/revoked/private" \
+			"$pki_dir/revoked/private_by_serial"
+		do
+			[[ -d "$private_dir" ]] || continue
+			find "$private_dir" -type d -exec chmod 700 {} + || return 1
+			find "$private_dir" -type f -exec chmod 600 {} + || return 1
+		done
+		if [[ -d "$pki_dir" ]]; then
+			find "$pki_dir" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
+		fi
 	done
-	if [[ -d "$easyrsa_dir/pki" ]]; then
-		find "$easyrsa_dir/pki" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
-	fi
 	if [[ -d "$wireguard_dir" ]]; then
 		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
 		find "$wireguard_dir" -type f -exec chmod 600 {} + || return 1
