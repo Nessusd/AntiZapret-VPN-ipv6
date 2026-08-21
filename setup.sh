@@ -1434,10 +1434,14 @@ validate_installed_kresd_config() {
 	for instance in 1 2; do
 		run_dir="$(mktemp -d "/tmp/antizapret-kresd-check.${instance}.XXXXXX")"
 		chown knot-resolver:knot-resolver "$run_dir"
-		set +e
-		output="$(SYSTEMD_INSTANCE="$instance" timeout 3 kresd -n -c /etc/knot-resolver/kresd.conf "$run_dir" 2>&1)"
-		status=$?
-		set -e
+		# timeout=124 means kresd stayed alive and accepted the configuration.
+		# Keep the expected non-zero status inside a conditional so ERR traps in
+		# the caller do not turn a successful probe into an installation failure.
+		if output="$(SYSTEMD_INSTANCE="$instance" timeout 3 kresd -n -c /etc/knot-resolver/kresd.conf "$run_dir" 2>&1)"; then
+			status=0
+		else
+			status=$?
+		fi
 		rm -rf -- "$run_dir"
 		if (( status != 124 )); then
 			echo "Error: Knot Resolver instance $instance rejected its configuration"
