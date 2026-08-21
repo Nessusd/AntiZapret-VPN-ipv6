@@ -28,12 +28,18 @@ OPENVPN_SERVER_UNITS=(
 )
 
 restart_managed_openvpn() {
-	local unit
+	local restarted=n unit
 	for unit in "${OPENVPN_SERVER_UNITS[@]}"; do
 		if systemctl is-active --quiet "$unit"; then
 			systemctl restart "$unit"
+			restarted=y
 		fi
 	done
+	if [[ "$restarted" == 'y' ]] && systemctl is-active --quiet antizapret-bgp.service; then
+		# BIRD binds its listeners to the current tunnel ifindex. OpenVPN creates
+		# a new interface during restart, so BIRD must bind again afterwards.
+		systemctl restart antizapret-bgp.service
+	fi
 }
 
 VERSION="$(openvpn --version | head -n 1 | awk '{print $2}')"
@@ -53,6 +59,11 @@ else
 fi
 
 if [[ "$DCO" == 'y' ]]; then
+	depmod -a
+	if ! modprobe ovpn; then
+		echo 'Cannot turn on DCO because the ovpn kernel module is unavailable'
+		exit 3
+	fi
 	for f in "${OPENVPN_SERVER_CONFIGS[@]}"; do
 		[[ -f "$f" ]] || continue
 		sed -i '/data-ciphers\|disable-dco/d' "$f"

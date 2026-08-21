@@ -298,6 +298,40 @@ read_install_unit_enabled_state() {
 	return 1
 }
 
+install_unit_enabled_state_matches() {
+	local actual=$1 expected=$2
+
+	[[ "$actual" == "$expected" ]] && return 0
+	if [[ "$expected" == 'not-found' ]]; then
+		case "$actual" in
+			disabled|static|indirect|generated|transient|linked|linked-runtime|alias|masked|masked-runtime|not-found) return 0 ;;
+		esac
+	fi
+	return 1
+}
+
+wait_install_unit_active() {
+	local deadline state unit=$1 timeout=${2:-90}
+
+	deadline=$((SECONDS + timeout))
+	while (( SECONDS < deadline )); do
+		state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+		case "$state" in
+			active) return 0 ;;
+			activating|reloading) sleep 1 ;;
+			*)
+				systemctl status --no-pager --full "$unit" || true
+				echo "Error: $unit failed during cutover (state: ${state:-unavailable})"
+				return 1
+				;;
+		esac
+	done
+
+	systemctl status --no-pager --full "$unit" || true
+	echo "Error: $unit did not become active within ${timeout}s"
+	return 1
+}
+
 restore_install_maintenance_units_before_snapshot() {
 	local failed=0 unit
 
@@ -882,7 +916,9 @@ restore_install_transaction() {
 		if ! state="$(read_install_unit_enabled_state "$unit")"; then
 			state=
 		fi
-		if [[ -z "$state" || "$state" != "${INSTALL_TRANSACTION_ENABLED[$unit]}" ]]; then
+		if [[ -z "$state" ]] ||
+			! install_unit_enabled_state_matches "$state" "${INSTALL_TRANSACTION_ENABLED[$unit]}"
+		then
 			echo "Rollback error: Cannot restore the enablement state of $unit (expected: ${INSTALL_TRANSACTION_ENABLED[$unit]}, got: ${state:-unavailable})"
 			failed=1
 		fi
@@ -1068,17 +1104,7 @@ VERSION="$(lsb_release -rs | cut -d '.' -f1)"
 CODENAME="$(lsb_release -cs)"
 ARCH="$(dpkg --print-architecture)"
 
-if [[ "$OS" == 'debian' ]]; then
-	if (( VERSION < 13 )); then
-		echo "Error: Debian $VERSION is not supported! Minimal supported version is 13"
-		exit 5
-	fi
-elif [[ "$OS" == 'ubuntu' ]]; then
-	if (( VERSION < 24 )); then
-		echo "Error: Ubuntu $VERSION is not supported! Minimal supported version is 24"
-		exit 6
-	fi
-else
+if [[ "$OS" != 'debian' && "$OS" != 'ubuntu' ]]; then
 	echo "Error: Your Linux distribution ($OS) is not supported!"
 	exit 7
 fi
@@ -2270,11 +2296,22 @@ elif [[ "$OS" == 'debian' ]] && (( VERSION < 14 )); then
 fi
 BGP_PACKAGE=
 [[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
+OPENVPN_DCO_PACKAGES=()
+if [[ "$OPENVPN_DCO" == 'y' ]]; then
+	OPENVPN_DCO_PACKAGES=(ovpn-dkms "linux-headers-$(uname -r)")
+fi
 OPENVPN_PATCH_PACKAGES=()
 if [[ "$OPENVPN_PATCH" != '0' ]]; then
 	OPENVPN_PATCH_PACKAGES=(tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev)
 fi
-apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_PATCH_PACKAGES[@]}"
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_DCO_PACKAGES[@]}" "${OPENVPN_PATCH_PACKAGES[@]}"
+if [[ "$OPENVPN_DCO" == 'y' ]]; then
+	depmod -a
+	if ! modprobe ovpn; then
+		echo 'Error: OpenVPN DCO was requested, but the ovpn kernel module is unavailable'
+		exit 20
+	fi
+fi
 if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
 	exit 14
 fi
@@ -2738,13 +2775,8 @@ for unit in kresd.target kres-cache-gc.service; do
 			;;
 	esac
 done
-sleep 2
 for unit in "${CORE_CUTOVER_UNITS[@]}"; do
-	if ! systemctl is-active --quiet "$unit"; then
-		systemctl status --no-pager --full "$unit" || true
-		echo "Error: $unit did not stay active after cutover"
-		exit 23
-	fi
+	wait_install_unit_active "$unit" || exit 23
 done
 
 # Файрвол уже в строю; теперь сетевое обновление списков не оставляет хост голым.
@@ -2777,13 +2809,8 @@ if [[ "$WIREGUARD_ENABLE" == 'y' ]]; then
 fi
 if (( ${#CUTOVER_VPN_UNITS[@]} > 0 )); then
 	systemctl start "${CUTOVER_VPN_UNITS[@]}"
-	sleep 2
 	for unit in "${CUTOVER_VPN_UNITS[@]}"; do
-		if ! systemctl is-active --quiet "$unit"; then
-			systemctl status --no-pager --full "$unit" || true
-			echo "Error: $unit did not stay active before custom-up"
-			exit 23
-		fi
+		wait_install_unit_active "$unit" || exit 23
 	done
 	CUTOVER_UNITS+=("${CUTOVER_VPN_UNITS[@]}")
 fi
@@ -2812,13 +2839,8 @@ for unit in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service;
 	esac
 done
 
-sleep 2
 for unit in "${CUTOVER_UNITS[@]}"; do
-	if ! systemctl is-active --quiet "$unit"; then
-		systemctl status --no-pager --full "$unit" || true
-		echo "Error: $unit did not stay active after cutover"
-		exit 23
-	fi
+	wait_install_unit_active "$unit" || exit 23
 done
 
 for unit in \
