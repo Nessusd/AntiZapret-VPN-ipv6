@@ -198,15 +198,15 @@ class ProxyResolver(BaseResolver):
             else:
                 data = request.send(self.address,self.port,tcp=True,timeout=self.timeout)
             reply = DNSRecord.parse(data)
-            if request.q.qtype in (QTYPE.A,QTYPE.AAAA) and (request.q.qtype != QTYPE.AAAA or 6 in self.pools):
+            if reply.header.rcode == RCODE.NOERROR and request.q.qtype in (QTYPE.A,QTYPE.AAAA) and (request.q.qtype != QTYPE.AAAA or 6 in self.pools):
                 new_rr = []
                 current_time = time.time()
                 qname = request.q.qname
                 is_smtp = qname.label and b'smtp' in qname.label[0]
                 for record in reply.rr:
                     if record.rtype != request.q.qtype:
+                        new_rr.append(record)
                         continue
-                    record.rname = qname
                     if record.ttl < self.min_ttl:
                         record.ttl = self.min_ttl
                     elif record.ttl > self.max_ttl:
@@ -260,13 +260,15 @@ if __name__ == "__main__":
     p.add_argument("--cleanup-expiry",type=int,default=7200,
                     metavar="<seconds>",
                     help="Seconds of inactivity before fake IP is removed (default: max-ttl * 2)")
-    p.add_argument("--min-ttl",type=int,default=300,
+    p.add_argument("--min-ttl",type=int,default=0,
                     metavar="<seconds>",
-                    help="Minimum TTL in seconds (default: 300)")
+                    help="Minimum TTL in seconds (default: 0)")
     p.add_argument("--max-ttl",type=int,default=3600,
                     metavar="<seconds>",
                     help="Maximum TTL in seconds (default: 3600)")
     args = p.parse_args()
+    if args.min_ttl < 0 or args.max_ttl < 1 or args.min_ttl > args.max_ttl:
+        p.error("TTL limits must satisfy 0 <= min-ttl <= max-ttl")
     args.dns,_,args.dns_port = args.upstream.partition(":")
     args.dns_port = int(args.dns_port or 53)
     TCPServer.request_queue_size = 128
