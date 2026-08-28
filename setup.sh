@@ -1183,58 +1183,92 @@ until [[ "$DISABLE_IPV6" =~ ^[yn]$ ]]; do
 	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
 done
 VPN_IPV6_PREFIX="${ENV_VPN_IPV6_PREFIX:-${ENV_WIREGUARD_IPV6_PREFIX:-${OLD_VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}}"
-validate_vpn_ipv6_prefix_with_python() {
-	python3 - "$1" <<'PY'
-import ipaddress
-import sys
+read_ipv6_details() {
+	local address=$1 output
 
-try:
-    prefix = ipaddress.ip_network(sys.argv[1], strict=True)
-except ValueError as exc:
-    print(f"Error: Invalid VPN IPv6 prefix: {exc}")
-    raise SystemExit(1) from exc
+	output="$(sipcalc "$address" 2>&1)" || return 1
+	[[ "$output" != *'-[ERR :'* ]] || return 1
+	IPV6_EXPANDED_ADDRESS="$(awk '/^Expanded Address/ { sub(/^.*-[[:space:]]*/, ""); print; exit }' <<< "$output")"
+	IPV6_PREFIX_LENGTH="$(awk '/^Prefix length/ { sub(/^.*-[[:space:]]*/, ""); print; exit }' <<< "$output")"
+	[[ "$IPV6_EXPANDED_ADDRESS" =~ ^([0-9a-f]{4}:){7}[0-9a-f]{4}$ ]] || return 1
+	[[ "$IPV6_PREFIX_LENGTH" =~ ^[0-9]{1,3}$ ]] || return 1
+}
 
-if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:
-    print("Error: VPN IPv6 prefix must be an IPv6 /48 network")
-    raise SystemExit(1)
-if not prefix.subnet_of(ipaddress.IPv6Network("fc00::/7")):
-    print("Error: VPN IPv6 prefix must be a private ULA /48 network")
-    raise SystemExit(1)
-PY
+normalize_ipv6_hextet() {
+	printf '%x' "$((16#$1))"
+}
+
+is_ipv4_address() {
+	local address=$1 octet
+	local -a octets=()
+
+	[[ "$address" != .* && "$address" != *. && "$address" != *..* ]] || return 1
+	IFS=. read -r -a octets <<< "$address"
+	(( ${#octets[@]} == 4 )) || return 1
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+		(( 10#$octet <= 255 )) || return 1
+	done
+}
+
+is_ipv6_address() {
+	read_ipv6_details "$1" && [[ "$IPV6_PREFIX_LENGTH" == '128' ]]
+}
+
+validate_vpn_ipv6_prefix() {
+	local prefix=$1
+	local -a hextets=()
+
+	if ! read_ipv6_details "$prefix"; then
+		echo "Error: Invalid VPN IPv6 prefix: $prefix"
+		return 1
+	fi
+	IFS=: read -r -a hextets <<< "$IPV6_EXPANDED_ADDRESS"
+	if [[ "$IPV6_PREFIX_LENGTH" != '48' ]] ||
+		[[ "${hextets[*]:3}" != '0000 0000 0000 0000 0000' ]]
+	then
+		echo 'Error: VPN IPv6 prefix must be an IPv6 /48 network'
+		return 1
+	fi
+	if [[ ! "${hextets[0]}" =~ ^f[cd][0-9a-f]{2}$ ]]; then
+		echo 'Error: VPN IPv6 prefix must be a private ULA /48 network'
+		return 1
+	fi
 }
 
 derive_vpn_ipv6_layout() {
-	local values=()
-	mapfile -t values < <(python3 - "$VPN_IPV6_PREFIX" <<'PY'
-import ipaddress
-import sys
+	local -a hextets=()
+	local base
 
-base = ipaddress.ip_network(sys.argv[1], strict=True)
-for subnet_id in (0x2900, 0x2904, 0x2908, 0x2800, 0x2804, 0x2808):
-    network = ipaddress.IPv6Network(
-        (int(base.network_address) | (subnet_id << 64), 64)
-    )
-    print(network)
-    print(ipaddress.IPv6Address(int(network.network_address) + 1))
-PY
-	)
-	if (( ${#values[@]} != 12 )); then
+	if ! validate_vpn_ipv6_prefix "$VPN_IPV6_PREFIX"; then
 		echo 'Error: Cannot derive VPN IPv6 networks from VPN_IPV6_PREFIX'
 		exit 14
 	fi
+	IFS=: read -r -a hextets <<< "$IPV6_EXPANDED_ADDRESS"
+	base="$(normalize_ipv6_hextet "${hextets[0]}"):$(normalize_ipv6_hextet "${hextets[1]}"):$(normalize_ipv6_hextet "${hextets[2]}")"
 
-	ANTIZAPRET_UDP_NETWORK6=${values[0]}
-	ANTIZAPRET_UDP_DNS6=${values[1]}
-	ANTIZAPRET_TCP_NETWORK6=${values[2]}
-	ANTIZAPRET_TCP_DNS6=${values[3]}
-	ANTIZAPRET_WG_NETWORK6=${values[4]}
-	ANTIZAPRET_WG_DNS6=${values[5]}
-	VPN_UDP_NETWORK6=${values[6]}
-	VPN_UDP_DNS6=${values[7]}
-	VPN_TCP_NETWORK6=${values[8]}
-	VPN_TCP_DNS6=${values[9]}
-	VPN_WG_NETWORK6=${values[10]}
-	VPN_WG_DNS6=${values[11]}
+	ANTIZAPRET_UDP_NETWORK6="$base:2900::/64"
+	ANTIZAPRET_UDP_DNS6="$base:2900::1"
+	ANTIZAPRET_TCP_NETWORK6="$base:2904::/64"
+	ANTIZAPRET_TCP_DNS6="$base:2904::1"
+	ANTIZAPRET_WG_NETWORK6="$base:2908::/64"
+	ANTIZAPRET_WG_DNS6="$base:2908::1"
+	VPN_UDP_NETWORK6="$base:2800::/64"
+	VPN_UDP_DNS6="$base:2800::1"
+	VPN_TCP_NETWORK6="$base:2804::/64"
+	VPN_TCP_DNS6="$base:2804::1"
+	VPN_WG_NETWORK6="$base:2808::/64"
+	VPN_WG_DNS6="$base:2808::1"
+}
+
+default_fake_ipv6_network() {
+	local -a hextets=()
+	local base
+
+	validate_vpn_ipv6_prefix "$1" >/dev/null || return 1
+	IFS=: read -r -a hextets <<< "$IPV6_EXPANDED_ADDRESS"
+	base="$(normalize_ipv6_hextet "${hextets[0]}"):$(normalize_ipv6_hextet "${hextets[1]}"):$(normalize_ipv6_hextet "${hextets[2]}")"
+	printf '%s:29ff::/96\n' "$base"
 }
 
 keep_ipv4_addresses() {
@@ -1358,76 +1392,115 @@ write_kresd_generated_config() {
 set_dns_directives() {
 	local kind=$1 path=$2
 	shift 2
-	python3 - "$kind" "$path" "$@" <<'PY'
-import ipaddress
-import os
-import stat
-import sys
-import tempfile
-from pathlib import Path
+	local address directory joined='' line normalized read_status temporary
+	local inserted=n managed=n newline trimmed
+	local -a replacement=()
 
-kind, raw_path, *addresses = sys.argv[1:]
-path = Path(raw_path)
-if not addresses:
-    raise SystemExit(f"no DNS addresses supplied for {path}")
+	if (( $# == 0 )); then
+		echo "Error: No DNS addresses supplied for $path"
+		return 1
+	fi
+	if [[ ! -f "$path" ]]; then
+		echo "Error: DNS configuration does not exist: $path"
+		return 1
+	fi
+	for address in "$@"; do
+		if is_ipv4_address "$address"; then
+			[[ "$kind" == 'openvpn' ]] && replacement+=("push \"dhcp-option DNS $address\"")
+		elif is_ipv6_address "$address"; then
+			[[ "$kind" == 'openvpn' ]] && replacement+=("push \"dhcp-option DNS6 $address\"")
+		else
+			echo "Error: Invalid DNS address: $address"
+			return 1
+		fi
+	done
+	case "$kind" in
+		openvpn) ;;
+		wireguard)
+			for address in "$@"; do
+				joined+="${joined:+, }$address"
+			done
+			replacement=("DNS = $joined")
+			;;
+		*)
+			echo "Error: Unsupported DNS directive type: $kind"
+			return 1
+			;;
+	esac
 
-original = path.read_text(encoding="utf-8")
-lines = original.splitlines(keepends=True)
+	directory=${path%/*}
+	[[ "$directory" != "$path" ]] || directory=.
+	temporary="$(mktemp "$directory/.${path##*/}.XXXXXX.tmp")" || return 1
+	while true; do
+		if IFS= read -r line; then
+			read_status=0
+		else
+			read_status=$?
+		fi
+		if (( read_status != 0 )) && [[ -z "$line" ]]; then
+			break
+		fi
 
-if kind == "openvpn":
-    def managed(line: str) -> bool:
-        value = line.strip()
-        return (
-            value.startswith('push "dhcp-option DNS ')
-            or value.startswith('push "dhcp-option DNS6 ')
-        ) and value.endswith('"')
+		normalized=${line%$'\r'}
+		trimmed="${normalized#"${normalized%%[![:space:]]*}"}"
+		trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+		managed=n
+		if [[ "$kind" == 'openvpn' && "$trimmed" =~ ^push\ \"dhcp-option\ DNS6?\ .*\"$ ]]; then
+			managed=y
+		elif [[ "$kind" == 'wireguard' && "$trimmed" =~ ^DNS\ = ]]; then
+			managed=y
+		fi
 
-    replacement = []
-    for address in addresses:
-        option = "DNS6" if ipaddress.ip_address(address).version == 6 else "DNS"
-        replacement.append(f'push "dhcp-option {option} {address}"\n')
-elif kind == "wireguard":
-    def managed(line: str) -> bool:
-        return line.strip().startswith("DNS =")
+		if [[ "$managed" == 'y' ]]; then
+			if [[ "$inserted" != 'y' ]]; then
+				newline=$'\n'
+				[[ "$line" == *$'\r' ]] && newline=$'\r\n'
+				printf '%s%s' "${replacement[0]}" "$newline" >> "$temporary" || {
+					rm -f -- "$temporary"
+					return 1
+				}
+				for address in "${replacement[@]:1}"; do
+					printf '%s%s' "$address" "$newline" >> "$temporary" || {
+						rm -f -- "$temporary"
+						return 1
+					}
+				done
+				inserted=y
+			fi
+		else
+			printf '%s' "$line" >> "$temporary" || {
+				rm -f -- "$temporary"
+				return 1
+			}
+			if (( read_status == 0 )) && ! printf '\n' >> "$temporary"; then
+				rm -f -- "$temporary"
+				return 1
+			fi
+		fi
+		(( read_status == 0 )) || break
+	done < "$path"
 
-    replacement = [f"DNS = {', '.join(addresses)}\n"]
-else:
-    raise SystemExit(f"unsupported DNS directive type: {kind}")
-
-result: list[str] = []
-inserted = False
-for line in lines:
-    if managed(line):
-        if not inserted:
-            newline = "\r\n" if line.endswith("\r\n") else "\n"
-            result.extend(item.replace("\n", newline) for item in replacement)
-            inserted = True
-        continue
-    result.append(line)
-
-if not inserted:
-    raise SystemExit(f"managed DNS directive not found in {path}")
-
-content = "".join(result)
-if content == original:
-    raise SystemExit(0)
-
-descriptor, temporary_name = tempfile.mkstemp(
-    prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-)
-temporary = Path(temporary_name)
-try:
-    mode = stat.S_IMODE(path.stat().st_mode)
-    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, mode)
-    os.replace(temporary, path)
-except BaseException:
-    temporary.unlink(missing_ok=True)
-    raise
-PY
+	if [[ "$inserted" != 'y' ]]; then
+		rm -f -- "$temporary"
+		echo "Error: Managed DNS directive not found in $path"
+		return 1
+	fi
+	if cmp -s -- "$temporary" "$path"; then
+		rm -f -- "$temporary"
+		return 0
+	fi
+	chmod --reference="$path" "$temporary" || {
+		rm -f -- "$temporary"
+		return 1
+	}
+	sync -f "$temporary" || {
+		rm -f -- "$temporary"
+		return 1
+	}
+	mv -f -- "$temporary" "$path" || {
+		rm -f -- "$temporary"
+		return 1
+	}
 }
 
 configure_installed_dns() {
@@ -1703,163 +1776,228 @@ require_firewall6_disabled() {
 	done
 }
 
+dns_append_byte() {
+	local value=$1 escaped
+
+	printf -v escaped '\\%03o' "$value"
+	printf '%b' "$escaped"
+}
+
+dns_append_u16() {
+	dns_append_byte "$(( ($1 >> 8) & 255 ))"
+	dns_append_byte "$(( $1 & 255 ))"
+}
+
+dns_build_query() {
+	local destination=$1 identifier=$2 name=${3%.} query_type_name=$4
+	local label query_type
+	local -a labels=()
+
+	case "$query_type_name" in
+		A) query_type=1 ;;
+		AAAA) query_type=28 ;;
+		*) return 1 ;;
+	esac
+	[[ -n "$name" && ${#name} -le 253 ]] || return 1
+	IFS=. read -r -a labels <<< "$name"
+	(( ${#labels[@]} > 0 )) || return 1
+	for label in "${labels[@]}"; do
+		[[ -n "$label" && ${#label} -le 63 && "$label" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+	done
+
+	: > "$destination" || return 1
+	{
+		dns_append_u16 "$identifier" || return 1
+		dns_append_u16 256 || return 1
+		dns_append_u16 1 || return 1
+		dns_append_u16 0 || return 1
+		dns_append_u16 0 || return 1
+		dns_append_u16 0 || return 1
+		for label in "${labels[@]}"; do
+			dns_append_byte "${#label}" || return 1
+			printf '%s' "$label" || return 1
+		done
+		dns_append_byte 0 || return 1
+		dns_append_u16 "$query_type" || return 1
+		dns_append_u16 1 || return 1
+	} >> "$destination"
+}
+
+dns_load_file_bytes() {
+	local target_name=$1 path=$2
+	local -n target=$target_name
+
+	read -r -a target <<< "$(od -An -v -tu1 -- "$path" | tr '\n' ' ')"
+	(( ${#target[@]} > 0 ))
+}
+
+dns_skip_name() {
+	local packet_name=$1 offset=$2 limit=$3 length
+	local -n packet=$packet_name
+
+	while (( offset < limit )); do
+		length=${packet[offset]}
+		if (( (length & 192) == 192 )); then
+			(( offset + 2 <= limit )) || return 1
+			DNS_OFFSET=$((offset + 2))
+			return 0
+		fi
+		(( (length & 192) == 0 )) || return 1
+		offset=$((offset + 1))
+		if (( length == 0 )); then
+			DNS_OFFSET=$offset
+			return 0
+		fi
+		(( length <= 63 && offset + length <= limit )) || return 1
+		offset=$((offset + length))
+	done
+	return 1
+}
+
+dns_address_hex() {
+	local query_type_name=$1 address=$2 hextet octet
+	local -a values=()
+
+	DNS_ADDRESS_HEX=
+	case "$query_type_name" in
+		A)
+			is_ipv4_address "$address" || return 1
+			IFS=. read -r -a values <<< "$address"
+			for octet in "${values[@]}"; do
+				printf -v DNS_ADDRESS_HEX '%s%02x' "$DNS_ADDRESS_HEX" "$((10#$octet))"
+			done
+			;;
+		AAAA)
+			is_ipv6_address "$address" || return 1
+			IFS=: read -r -a values <<< "$IPV6_EXPANDED_ADDRESS"
+			for hextet in "${values[@]}"; do
+				printf -v DNS_ADDRESS_HEX '%s%04x' "$DNS_ADDRESS_HEX" "$((16#$hextet))"
+			done
+			;;
+		*) return 1 ;;
+	esac
+}
+
+dns_validate_response() {
+	local response_path=$1 query_path=$2 identifier=$3 query_type_name=$4 expected=$5 transport=$6
+	local answers base=0 data_hex='' data_length flags i limit matched=n offset
+	local query_type questions record_class record_type response_identifier tcp_length
+	local -a query_bytes=() response_bytes=()
+
+	dns_load_file_bytes response_bytes "$response_path" || return 1
+	dns_load_file_bytes query_bytes "$query_path" || return 1
+	if [[ "$transport" == 'tcp' ]]; then
+		(( ${#response_bytes[@]} >= 2 )) || return 1
+		tcp_length=$((response_bytes[0] * 256 + response_bytes[1]))
+		(( ${#response_bytes[@]} >= tcp_length + 2 )) || return 1
+		base=2
+		limit=$((tcp_length + 2))
+	else
+		limit=${#response_bytes[@]}
+	fi
+	(( limit >= base + 12 )) || return 1
+
+	response_identifier=$((response_bytes[base] * 256 + response_bytes[base + 1]))
+	flags=$((response_bytes[base + 2] * 256 + response_bytes[base + 3]))
+	questions=$((response_bytes[base + 4] * 256 + response_bytes[base + 5]))
+	answers=$((response_bytes[base + 6] * 256 + response_bytes[base + 7]))
+	(( response_identifier == identifier )) || return 1
+	(( (flags & 32768) != 0 && (flags & 15) == 0 )) || return 1
+	(( questions == 1 && answers > 0 )) || return 1
+
+	(( limit >= base + ${#query_bytes[@]} )) || return 1
+	for ((i = 12; i < ${#query_bytes[@]}; i++)); do
+		(( response_bytes[base + i] == query_bytes[i] )) || return 1
+	done
+	offset=$((base + ${#query_bytes[@]}))
+	[[ "$query_type_name" == 'AAAA' ]] && query_type=28 || query_type=1
+	if [[ -n "$expected" ]]; then
+		dns_address_hex "$query_type_name" "$expected" || return 1
+	fi
+
+	for ((i = 0; i < answers; i++)); do
+		dns_skip_name response_bytes "$offset" "$limit" || return 1
+		offset=$DNS_OFFSET
+		(( offset + 10 <= limit )) || return 1
+		record_type=$((response_bytes[offset] * 256 + response_bytes[offset + 1]))
+		record_class=$((response_bytes[offset + 2] * 256 + response_bytes[offset + 3]))
+		data_length=$((response_bytes[offset + 8] * 256 + response_bytes[offset + 9]))
+		offset=$((offset + 10))
+		(( offset + data_length <= limit )) || return 1
+		if [[ -n "$expected" ]] && (( record_class == 1 && record_type == query_type )); then
+			data_hex=
+			for ((tcp_length = 0; tcp_length < data_length; tcp_length++)); do
+				printf -v data_hex '%s%02x' "$data_hex" "${response_bytes[offset + tcp_length]}"
+			done
+			[[ "$data_hex" != "$DNS_ADDRESS_HEX" ]] || matched=y
+		fi
+		offset=$((offset + data_length))
+	done
+	[[ -z "$expected" || "$matched" == 'y' ]]
+}
+
+dns_query_once() {
+	local address=$1 name=$2 query_type_name=$3 expected=$4 transport=$5 identifier=$6 directory=$7
+	local endpoint packet="$directory/query-$identifier" request="$directory/request-$identifier"
+	local response="$directory/response-$identifier" port=${DNS_PROBE_PORT:-53}
+
+	dns_build_query "$packet" "$identifier" "$name" "$query_type_name" || return 1
+	if is_ipv6_address "$address"; then
+		endpoint="${transport^^}6:[$address]:$port,bind=[$address]"
+	elif is_ipv4_address "$address"; then
+		endpoint="${transport^^}4:$address:$port,bind=$address"
+	else
+		return 1
+	fi
+	if [[ "$transport" == 'tcp' ]]; then
+		: > "$request" || return 1
+		dns_append_u16 "$(stat -c %s "$packet")" >> "$request" || return 1
+		cat "$packet" >> "$request" || return 1
+	else
+		request=$packet
+	fi
+	timeout 3 socat -T2 - "$endpoint" < "$request" > "$response" 2>/dev/null || return 1
+	dns_validate_response "$response" "$packet" "$identifier" "$query_type_name" "$expected" "$transport"
+}
+
 probe_dns_records() {
-	python3 - "$@" <<'PY'
-import ipaddress
-import os
-import socket
-import struct
-import sys
-import time
+	local address attempt directory expected identifier name query_index=0 query_type_name success transport
 
-
-QUERY_TYPES = {"A": 1, "AAAA": 28}
-
-
-def encode_name(name: str) -> bytes:
-    labels = name.rstrip(".").encode("ascii").split(b".")
-    if not labels or any(not label or len(label) > 63 for label in labels):
-        raise ValueError(f"invalid DNS name: {name!r}")
-    return b"".join(bytes((len(label),)) + label for label in labels) + b"\x00"
-
-
-def skip_name(packet: bytes, offset: int) -> int:
-    while True:
-        if offset >= len(packet):
-            raise RuntimeError("truncated DNS name")
-        length = packet[offset]
-        if length & 0xC0 == 0xC0:
-            if offset + 2 > len(packet):
-                raise RuntimeError("truncated DNS name pointer")
-            return offset + 2
-        if length & 0xC0:
-            raise RuntimeError("invalid DNS name label")
-        offset += 1
-        if length == 0:
-            return offset
-        offset += length
-        if offset > len(packet):
-            raise RuntimeError("truncated DNS name label")
-
-
-def receive_exact(connection: socket.socket, size: int) -> bytes:
-    chunks = bytearray()
-    while len(chunks) < size:
-        chunk = connection.recv(size - len(chunks))
-        if not chunk:
-            raise RuntimeError("short TCP DNS response")
-        chunks.extend(chunk)
-    return bytes(chunks)
-
-
-def validate_response(
-    response: bytes,
-    identifier: int,
-    question: bytes,
-    query_type: int,
-    expected: str | None,
-) -> None:
-    if len(response) < 12:
-        raise RuntimeError("short DNS response")
-    response_id, flags, questions, answers, _, _ = struct.unpack("!HHHHHH", response[:12])
-    if response_id != identifier:
-        raise RuntimeError("DNS transaction ID mismatch")
-    if not flags & 0x8000:
-        raise RuntimeError("packet is not a DNS response")
-    if questions != 1:
-        raise RuntimeError(f"DNS response has {questions} questions")
-    rcode = flags & 0x000F
-    if rcode != 0:
-        raise RuntimeError(f"DNS resolver returned RCODE {rcode}")
-    if answers < 1:
-        raise RuntimeError("DNS response has no answers")
-    if response[12 : 12 + len(question)] != question:
-        raise RuntimeError("DNS response question mismatch")
-
-    offset = 12 + len(question)
-    returned_addresses: set[str] = set()
-    for _ in range(answers):
-        offset = skip_name(response, offset)
-        if offset + 10 > len(response):
-            raise RuntimeError("truncated DNS resource record")
-        record_type, record_class, _, data_length = struct.unpack(
-            "!HHIH", response[offset : offset + 10]
-        )
-        offset += 10
-        data = response[offset : offset + data_length]
-        if len(data) != data_length:
-            raise RuntimeError("truncated DNS record data")
-        offset += data_length
-        if record_class == 1 and record_type == query_type:
-            if record_type == QUERY_TYPES["A"] and data_length == 4:
-                returned_addresses.add(str(ipaddress.IPv4Address(data)))
-            elif record_type == QUERY_TYPES["AAAA"] and data_length == 16:
-                returned_addresses.add(str(ipaddress.IPv6Address(data)))
-
-    if expected is not None:
-        normalized = str(ipaddress.ip_address(expected))
-        if normalized not in returned_addresses:
-            actual = ", ".join(sorted(returned_addresses)) or "none"
-            raise RuntimeError(f"expected {normalized}, received {actual}")
-
-
-def query(
-    address: str,
-    name: str,
-    query_type_name: str,
-    expected: str | None,
-    transport: str,
-    identifier: int,
-) -> None:
-    family = socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
-    endpoint = (address, 53, 0, 0) if family == socket.AF_INET6 else (address, 53)
-    query_type = QUERY_TYPES[query_type_name]
-    question = encode_name(name) + struct.pack("!HH", query_type, 1)
-    packet = struct.pack("!HHHHHH", identifier, 0x0100, 1, 0, 0, 0) + question
-    socket_type = socket.SOCK_DGRAM if transport == "udp" else socket.SOCK_STREAM
-    with socket.socket(family, socket_type) as connection:
-        connection.settimeout(2)
-        connection.bind((address, 0, 0, 0) if family == socket.AF_INET6 else (address, 0))
-        connection.connect(endpoint)
-        if transport == "udp":
-            connection.send(packet)
-            response = connection.recv(4096)
-        else:
-            connection.sendall(struct.pack("!H", len(packet)) + packet)
-            response_size = struct.unpack("!H", receive_exact(connection, 2))[0]
-            response = receive_exact(connection, response_size)
-    validate_response(response, identifier, question, query_type, expected)
-
-
-arguments = sys.argv[1:]
-if not arguments or len(arguments) % 4:
-    print("DNS probe requires ADDRESS NAME TYPE EXPECTED groups", file=sys.stderr)
-    raise SystemExit(2)
-
-for query_index in range(0, len(arguments), 4):
-    address, name, query_type_name, expected_value = arguments[query_index : query_index + 4]
-    if query_type_name not in QUERY_TYPES:
-        print(f"unsupported DNS query type: {query_type_name}", file=sys.stderr)
-        raise SystemExit(2)
-    expected = expected_value or None
-    for transport_index, transport in enumerate(("udp", "tcp")):
-        last_error: BaseException | None = None
-        for attempt in range(3):
-            identifier = (os.getpid() + query_index * 17 + transport_index * 7 + attempt) & 0xFFFF
-            try:
-                query(address, name, query_type_name, expected, transport, identifier)
-                break
-            except (OSError, RuntimeError, ValueError, struct.error) as exc:
-                last_error = exc
-                time.sleep(0.5)
-        else:
-            print(
-                f"DNS {transport.upper()} {name} {query_type_name} probe failed "
-                f"via {address}: {last_error}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-PY
+	if (( $# == 0 || $# % 4 != 0 )); then
+		echo 'DNS probe requires ADDRESS NAME TYPE EXPECTED groups' >&2
+		return 2
+	fi
+	directory="$(mktemp -d /tmp/antizapret-dns-probe.XXXXXX)" || return 1
+	while (( $# > 0 )); do
+		address=$1
+		name=$2
+		query_type_name=$3
+		expected=$4
+		shift 4
+		if [[ "$query_type_name" != 'A' && "$query_type_name" != 'AAAA' ]]; then
+			echo "Unsupported DNS query type: $query_type_name" >&2
+			rm -rf -- "$directory"
+			return 2
+		fi
+		for transport in udp tcp; do
+			success=n
+			for attempt in 0 1 2; do
+				identifier=$(( ($$ + query_index * 17 + attempt) & 65535 ))
+				if dns_query_once "$address" "$name" "$query_type_name" "$expected" "$transport" "$identifier" "$directory"; then
+					success=y
+					break
+				fi
+				sleep 0.5
+			done
+			if [[ "$success" != 'y' ]]; then
+				echo "DNS ${transport^^} $name $query_type_name probe failed via $address" >&2
+				rm -rf -- "$directory"
+				return 1
+			fi
+			query_index=$((query_index + 1))
+		done
+	done
+	rm -rf -- "$directory"
 }
 
 require_dns_runtime() {
@@ -1955,11 +2093,11 @@ validate_cutover_runtime() {
 	fi
 	require_dns_runtime "${dns_queries[@]}"
 }
-# Python is normally present on supported systems. On a minimal image perform
-# an early structural ULA /48 check, then repeat the authoritative validation
-# immediately after Python is installed.
-if command -v python3 >/dev/null; then
-	if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
+# sipcalc is installed on supported systems. On a minimal image perform an
+# early structural ULA /48 check, then repeat the authoritative validation
+# immediately after the package dependencies are installed.
+if command -v sipcalc >/dev/null; then
+	if ! validate_vpn_ipv6_prefix "$VPN_IPV6_PREFIX"; then
 		exit 14
 	fi
 elif ! [[ "$VPN_IPV6_PREFIX" =~ ^[Ff][CcDd][0-9A-Fa-f]{2}:[0-9A-Fa-f:]+\/48$ ]]; then
@@ -2035,15 +2173,8 @@ until [[ "$ALTERNATIVE_FAKE_IP" =~ ^[yn]$ ]]; do
 	read -rp 'Use alternative range of FAKE IP addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IP
 done
 echo
-if command -v python3 >/dev/null; then
-	DEFAULT_FAKE_IPV6_NETWORK="$(python3 - "$VPN_IPV6_PREFIX" <<'PY'
-import ipaddress
-import sys
-
-prefix = ipaddress.ip_network(sys.argv[1], strict=True)
-print(ipaddress.IPv6Network((int(prefix.network_address) | (0x29FF << 64), 96)))
-PY
-	)"
+if command -v sipcalc >/dev/null; then
+	DEFAULT_FAKE_IPV6_NETWORK="$(default_fake_ipv6_network "$VPN_IPV6_PREFIX")"
 else
 	DEFAULT_FAKE_IPV6_NETWORK="ULA /96 derived from $VPN_IPV6_PREFIX"
 fi
@@ -2330,7 +2461,7 @@ if [[ "$OPENVPN_DCO" == 'y' ]]; then
 		exit 20
 	fi
 fi
-if ! validate_vpn_ipv6_prefix_with_python "$VPN_IPV6_PREFIX"; then
+if ! validate_vpn_ipv6_prefix "$VPN_IPV6_PREFIX"; then
 	exit 14
 fi
 derive_vpn_ipv6_layout
