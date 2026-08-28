@@ -2035,6 +2035,24 @@ until [[ "$ALTERNATIVE_FAKE_IP" =~ ^[yn]$ ]]; do
 	read -rp 'Use alternative range of FAKE IP addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IP
 done
 echo
+if command -v python3 >/dev/null; then
+	DEFAULT_FAKE_IPV6_NETWORK="$(python3 - "$VPN_IPV6_PREFIX" <<'PY'
+import ipaddress
+import sys
+
+prefix = ipaddress.ip_network(sys.argv[1], strict=True)
+print(ipaddress.IPv6Network((int(prefix.network_address) | (0x29FF << 64), 96)))
+PY
+	)"
+else
+	DEFAULT_FAKE_IPV6_NETWORK="ULA /96 derived from $VPN_IPV6_PREFIX"
+fi
+echo "Default FAKE IPv6 address range:     $DEFAULT_FAKE_IPV6_NETWORK"
+echo 'Alternative FAKE IPv6 address range: 2001:2::/48 (benchmarking)'
+until [[ "$ALTERNATIVE_FAKE_IPV6" =~ ^[yn]$ ]]; do
+	read -rp 'Use alternative range of FAKE IPv6 addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IPV6
+done
+echo
 until [[ "$OPENVPN_BACKUP_TCP" =~ ^[yn]$ ]]; do
 	read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP
 done
@@ -2457,6 +2475,7 @@ VPN_DNS=$VPN_DNS
 BLOCK_ADS=$BLOCK_ADS
 ALTERNATIVE_CLIENT_IP=$ALTERNATIVE_CLIENT_IP
 ALTERNATIVE_FAKE_IP=$ALTERNATIVE_FAKE_IP
+ALTERNATIVE_FAKE_IPV6=$ALTERNATIVE_FAKE_IPV6
 OPENVPN_BACKUP_TCP=$OPENVPN_BACKUP_TCP
 OPENVPN_BACKUP_UDP=$OPENVPN_BACKUP_UDP
 WIREGUARD_BACKUP=$WIREGUARD_BACKUP

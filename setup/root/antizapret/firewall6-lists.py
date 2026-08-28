@@ -31,10 +31,15 @@ OPENVPN_CLIENT_PREFIX_END = "# END ANTIZAPRET MANAGED CLIENT IPV6"
 DEFAULT_IPV6_PREFIX = "fd3a:c9bc:6bcb::/48"
 FAKE_IPV6_SUBNET = 0x29FF
 FAKE_IPV6_PREFIX_LENGTH = 96
+BENCHMARK_FAKE_IPV6_NETWORK = ipaddress.IPv6Network("2001:2::/48")
 CLIENT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 
 
-def fake_ipv6_network(prefix: str) -> ipaddress.IPv6Network:
+def fake_ipv6_network(
+    prefix: str, alternative: bool = False
+) -> ipaddress.IPv6Network:
+    if alternative:
+        return BENCHMARK_FAKE_IPV6_NETWORK
     try:
         network = ipaddress.ip_network(prefix, strict=True)
     except ValueError as exc:
@@ -544,7 +549,8 @@ def main(argv: list[str]) -> int:
     route = downloaded_networks(refresh_download) | read_networks(["config/*include-ips.txt"])
     route.difference_update(read_networks(["config/*exclude-ips.txt"]))
     fake_network = fake_ipv6_network(
-        os.environ.get("VPN_IPV6_PREFIX") or DEFAULT_IPV6_PREFIX
+        os.environ.get("VPN_IPV6_PREFIX") or DEFAULT_IPV6_PREFIX,
+        os.environ.get("ALTERNATIVE_FAKE_IPV6", "n") == "y",
     )
 
     write_result("route-ips6.txt", route)

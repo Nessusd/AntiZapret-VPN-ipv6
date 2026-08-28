@@ -5,7 +5,7 @@ export LC_ALL=C
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 cd "$ROOT_DIR"
 source setup
-export DISABLE_IPV6 VPN_IPV6_PREFIX BGP_ENABLE
+export DISABLE_IPV6 VPN_IPV6_PREFIX BGP_ENABLE ALTERNATIVE_FAKE_IPV6
 
 DISABLE_IPV6="${DISABLE_IPV6:-n}"
 ANTIZAPRET_IPV6_IN_INTERFACE="${ANTIZAPRET_IPV6_IN_INTERFACE:-antizapret+}"
@@ -77,9 +77,13 @@ POSTROUTING_CHAIN=ANTIZAPRET6-POSTROUTING
 MAPPING_CHAIN=ANTIZAPRET6-MAPPING
 ANTIZAPRET_MARK=0x10000000/0x30000000
 VPN_MARK=0x20000000/0x30000000
-FAKE_IPV6_NETWORK="$(python3 - "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" <<'PY'
+FAKE_IPV6_NETWORK="$(python3 - "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" "${ALTERNATIVE_FAKE_IPV6:-n}" <<'PY'
 import ipaddress
 import sys
+
+if sys.argv[2] == "y":
+    print("2001:2::/48")
+    raise SystemExit(0)
 
 prefix = ipaddress.ip_network(sys.argv[1], strict=True)
 if not isinstance(prefix, ipaddress.IPv6Network) or prefix.prefixlen != 48:

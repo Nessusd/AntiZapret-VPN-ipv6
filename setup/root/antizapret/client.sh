@@ -32,7 +32,7 @@ fi
 export EASYRSA_PKI=/etc/openvpn/easyrsa3/pki
 cd /root/antizapret
 source setup
-export DISABLE_IPV6 BGP_ENABLE
+export DISABLE_IPV6 BGP_ENABLE ALTERNATIVE_FAKE_IPV6
 umask 022
 OPTION="$1"
 CLIENT_NAME="$2"
@@ -269,7 +269,11 @@ prepareWireGuardIPv6(){
 		WIREGUARD_IPV6_ROUTES=', ::/0'
 	else
 		WIREGUARD_IPV6_ROUTES=", $WIREGUARD_IPV6_NETWORK"
-		WIREGUARD_IPV6_ROUTES+=", $(python3 "$WIREGUARD_IPV6_HELPER" --prefix "$WIREGUARD_IPV6_PREFIX" fake-network)"
+		WIREGUARD_FAKE_IPV6_ARGS=(--prefix "$WIREGUARD_IPV6_PREFIX")
+		if [[ "${ALTERNATIVE_FAKE_IPV6:-n}" == 'y' ]]; then
+			WIREGUARD_FAKE_IPV6_ARGS+=(--alternative-fake-ipv6)
+		fi
+		WIREGUARD_IPV6_ROUTES+=", $(python3 "$WIREGUARD_IPV6_HELPER" "${WIREGUARD_FAKE_IPV6_ARGS[@]}" fake-network)"
 		if [[ -f /root/antizapret/result/route-ips6.txt ]]; then
 			while IFS= read -r route; do
 				[[ -n "$route" ]] && WIREGUARD_IPV6_ROUTES+=", $route"

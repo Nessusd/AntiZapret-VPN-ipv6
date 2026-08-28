@@ -104,7 +104,11 @@ def ipv6_subnet(prefix: ipaddress.IPv6Network, subnet: int) -> ipaddress.IPv6Net
     return ipaddress.IPv6Network((int(prefix.network_address) | (subnet << 64), 64))
 
 
-def fake_ipv6_network(prefix: ipaddress.IPv6Network) -> ipaddress.IPv6Network:
+def fake_ipv6_network(
+    prefix: ipaddress.IPv6Network, alternative: bool = False
+) -> ipaddress.IPv6Network:
+    if alternative:
+        return ipaddress.IPv6Network("2001:2::/48")
     return ipaddress.IPv6Network(
         (int(prefix.network_address) | (0x29FF << 64), 96)
     )
@@ -357,7 +361,11 @@ def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
         )
         network4.add(fake4)
         if ipv6_enabled:
-            network6.add(fake_ipv6_network(vpn_prefix(config)))
+            network6.add(
+                fake_ipv6_network(
+                    vpn_prefix(config), yes_no(config, "ALTERNATIVE_FAKE_IPV6")
+                )
+            )
         if len(ordered(network4)) > MAX_PREFIXES or len(ordered(network6)) > MAX_PREFIXES:
             raise BGPError(f"too many advertised prefixes; limit is {MAX_PREFIXES}")
 

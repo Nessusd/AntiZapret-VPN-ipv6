@@ -9,9 +9,12 @@ from dnslib.server import DNSServer,DNSHandler,BaseResolver,DNSLogger,TCPServer
 DEFAULT_IPV6_PREFIX = "fd3a:c9bc:6bcb::/48"
 FAKE_IPV6_SUBNET = 0x29FF
 FAKE_IPV6_PREFIX_LENGTH = 96
+BENCHMARK_FAKE_IPV6_NETWORK = IPv6Network("2001:2::/48")
 
 
-def fake_ipv6_network(prefix):
+def fake_ipv6_network(prefix, alternative=False):
+    if alternative:
+        return BENCHMARK_FAKE_IPV6_NETWORK
     network = ip_network(prefix,strict=True)
     if not isinstance(network,IPv6Network) or network.prefixlen != 48:
         raise ValueError("VPN IPv6 prefix must be an IPv6 /48 network")
@@ -249,9 +252,12 @@ if __name__ == "__main__":
     p.add_argument("--ip-range",default="198.18.0.0/15",
                     metavar="<ip/mask>",
                     help="Fake IP range (default:198.18.0.0/15)")
-    p.add_argument("--ip6-range",default=str(fake_ipv6_network(os.environ.get("VPN_IPV6_PREFIX") or DEFAULT_IPV6_PREFIX)),
+    p.add_argument("--ip6-range",default=str(fake_ipv6_network(
+                        os.environ.get("VPN_IPV6_PREFIX") or DEFAULT_IPV6_PREFIX,
+                        os.environ.get("ALTERNATIVE_FAKE_IPV6", "n") == "y",
+                    )),
                     metavar="<ipv6/mask>",
-                    help="Fake IPv6 range derived from VPN_IPV6_PREFIX")
+                    help="Fake IPv6 range selected by setup")
     p.add_argument("--disable-ipv6",action="store_true",default=os.environ.get("DISABLE_IPV6","n") == "y",
                     help="Disable AAAA rewriting and IPv6 mappings")
     p.add_argument("--cleanup-interval",type=int,default=3600,
