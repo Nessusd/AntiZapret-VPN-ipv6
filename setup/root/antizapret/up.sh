@@ -53,6 +53,18 @@ write_cutover_hook_state() {
 	fi
 }
 
+flush_proxy_mappings() {
+	local command chain
+
+	while read -r command chain; do
+		"$command" -w -t nat -S "$chain" &>/dev/null || continue
+		"$command" -w -t nat -F "$chain"
+	done <<'EOF'
+iptables ANTIZAPRET-MAPPING
+ip6tables ANTIZAPRET6-MAPPING
+EOF
+}
+
 if [[ "${1:-}" == '--complete-cutover' ]]; then
 	(
 		CUTOVER_HOOK_LOCK_FD=
@@ -108,6 +120,9 @@ if [[ -f "$CUTOVER_HOOK_MARKER" ]] &&
 	[[ "$(< "$CUTOVER_HOOK_MARKER")" == 'deferred' ]] && cutover_lock_active
 then
 	ANTIZAPRET_INTERNAL_PRECLEANUP=y ./down.sh
+	# The previous proxy mappings belong to its fake address pools. They cannot
+	# be reused when an installation changes the IPv4 range or IPv6 prefix.
+	flush_proxy_mappings
 else
 	./down.sh
 fi
