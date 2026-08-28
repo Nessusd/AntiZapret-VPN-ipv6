@@ -1,0 +1,183 @@
+/*=============== NOTIFICATIONS ===============*/
+/* Canonical notification toast — used on all pages via notifications.js */
+
+.notification-stack {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(92vw, 460px);
+  pointer-events: none;
+}
+
+.notification-stack .notification {
+  position: relative;
+  top: auto;
+  right: auto;
+  pointer-events: auto;
+}
+
+.notification {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 2000;
+  min-width: 260px;
+  max-width: min(92vw, 460px);
+  padding: 0.78rem 1rem;
+  border-radius: 0.75rem;
+  color: #f8fbfe;
+  background: rgba(35, 48, 56, 0.92);
+  border: 1px solid rgba(111, 169, 191, 0.54);
+  box-shadow: 0 10px 20px rgba(5, 10, 14, 0.38);
+  backdrop-filter: blur(8px);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  animation: notif-in 0.2s ease;
+}
+
+.notification-inline-progress {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  max-width: 100%;
+  min-width: 0;
+  animation: none;
+}
+
+.notification-success {
+  border-color: rgba(126, 220, 184, 0.64);
+  background: rgba(35, 93, 78, 0.92);
+}
+
+.notification-info {
+  border-color: rgba(90, 157, 203, 0.64);
+  background: rgba(30, 65, 90, 0.92);
+}
+
+.notification-error {
+  border-color: rgba(213, 103, 95, 0.7);
+  background: rgba(104, 43, 39, 0.94);
+}
+
+.notification-warning {
+  border-color: rgba(227, 166, 91, 0.64);
+  background: rgba(90, 62, 20, 0.92);
+}
+
+.notification.notification-exit {
+  animation: notif-out 0.2s ease forwards !important;
+}
+
+@keyframes notif-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes notif-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@media (max-width: 768px) {
+  .notification-stack {
+    left: 0.6rem;
+    right: 0.6rem;
+    top: 0.6rem;
+    max-width: none;
+  }
+
+  .notification:not(.notification-stack .notification) {
+    left: 0.6rem;
+    right: 0.6rem;
+    min-width: auto;
+    top: 0.6rem;
+  }
+}
+
+/* ── Global background-task progress (settings, edit_files, routing) ── */
+.global-task-progress {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  z-index: 2500;
+  width: min(92vw, 520px);
+  pointer-events: none;
+}
+
+.global-task-progress .upd-progress-block {
+  margin-top: 0;
+  box-shadow: 0 12px 32px rgba(5, 10, 14, 0.45);
+}
+
+.upd-progress-block {
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  background: rgba(18, 28, 36, 0.94);
+  border: 1px solid rgba(55, 80, 95, 0.45);
+}
+
+.upd-progress-block__track {
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(50, 75, 90, 0.5);
+  overflow: hidden;
+  margin-bottom: 0.6rem;
+}
+
+.upd-progress-block__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3d9d7a, #5bc89a);
+  transition: width 0.4s ease;
+}
+
+.upd-progress-block__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.83rem;
+  color: #9ab8c8;
+}
+
+.upd-progress-block__title {
+  font-weight: 600;
+  color: #d8e8f0;
+  margin-bottom: 0.45rem;
+  font-size: 0.88rem;
+}
+
+.upd-progress-block__spinner {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(80, 190, 140, 0.35);
+  border-top-color: #50d090;
+  animation: task-progress-spin 0.75s linear infinite;
+}
+
+@keyframes task-progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

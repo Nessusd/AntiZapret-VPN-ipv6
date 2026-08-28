@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow, noarchive" />
+  <meta name="description"
+    content="Панель администрирования {{ panel_brand_name }}. Доступ только для авторизованных пользователей." />
+
+  <!--=============== REMIXICONS ===============-->
+  <link href="https://cdn.jsdelivr.net/npm/remixicon@2.5.0/fonts/remixicon.css" rel="stylesheet" />
+
+  <!--=============== CSS ===============-->
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/theme.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/login_styles.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/styles_mobile.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/notifications.css') }}" />
+
+  <title>Вход — панель {{ panel_brand_name }}</title>
+  <link rel="icon" href="/static/assets/img/favicon.ico" type="image/x-icon" />
+</head>
+
+<body class="auth-index-bridge">
+  <div class="login-shell">
+    <section class="login-stage" aria-label="Страница авторизации">
+      <div class="login login--embedded">
+        <script id="flash-messages" type="application/json" nonce="{{ csp_nonce }}">
+            {{ get_flashed_messages(with_categories=True) | tojson }}
+          </script>
+
+        <form action="{{ url_for('login') }}" method="POST" class="login__form" autocomplete="on"
+          data-attempts="{{ session.get('attempts', 0) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <div class="login__brand">
+            <span class="login__eyebrow">{{ panel_brand_name }}</span>
+            <h1 class="login__title">Панель администрирования</h1>
+            <p class="login__subtitle">
+              {% if panel_host %}Сервер: <strong>{{ panel_host }}</strong>. {% endif %}
+              Вход только для выданных учётных записей администратора или viewer.
+            </p>
+          </div>
+
+          <p class="login-trust-notice" role="note">
+            Официальная панель управления{% if panel_host %} (<strong>{{ panel_host }}</strong>){% endif %}.
+            Это не страница банка, почты или Google — не вводите пароли от сторонних сервисов.
+          </p>
+
+          <div class="login__content">
+            <div class="login__box">
+              <i class="ri-user-3-line login__icon"></i>
+
+              <div class="login__box-input">
+                <input type="text" required class="login__input" id="login-email" name="username" placeholder=" "
+                  autocomplete="username" autocapitalize="off" spellcheck="false" />
+                <label for="login-email" class="login__label">Логин</label>
+              </div>
+            </div>
+
+            <div class="login__box">
+              <i class="ri-lock-2-line login__icon"></i>
+
+              <div class="login__box-input">
+                <input type="password" required class="login__input" id="login-pass" name="password" placeholder=" "
+                  autocomplete="current-password" />
+                <label for="login-pass" class="login__label">Пароль</label>
+                <i class="ri-eye-off-line login__eye" id="login-eye"></i>
+              </div>
+            </div>
+          </div>
+
+          <div class="login__check">
+            <div class="login__check-group">
+              <input type="checkbox" class="login__check-input" id="login-check" name="remember_me" value="1" />
+              <label for="login-check" class="login__check-label">Запомнить меня</label>
+            </div>
+          </div>
+          <p class="login__check-hint">На этом устройстве до {{ remember_me_days }} дней.</p>
+
+          <div class="captcha-container hidden">
+            <div class="captcha-wrapper">
+              <input type="text" id="captcha-input" name="captcha" maxlength="6" placeholder=" " autocomplete="off" />
+              <label class="captcha__label">Код</label>
+            </div>
+            <div class="captcha-image-group">
+              <img src="/captcha.png" alt="Captcha" id="captcha-img" />
+              <button type="button" id="refresh-captcha" aria-label="Обновить капчу">🔄</button>
+            </div>
+          </div>
+
+          <button type="submit" class="login__button" id="login-submit">Войти</button>
+
+          {% if telegram_login_enabled and telegram_bot_username %}
+          <div class="login__telegram">
+            <div class="login__divider">или войдите через Telegram</div>
+            <div class="login__telegram-widget">
+              <script async src="https://telegram.org/js/telegram-widget.js?22"
+                data-telegram-login="{{ telegram_bot_username }}" data-size="large" data-radius="10"
+                data-auth-url="{{ url_for('auth_telegram', _external=True) }}" data-request-access="write"></script>
+            </div>
+          </div>
+          {% endif %}
+        </form>
+      </div>
+    </section>
+  </div>
+
+  {% if telegram_login_enabled and telegram_bot_username %}
+  <script src="https://telegram.org/js/telegram-web-app.js?57"></script>
+  <script nonce="{{ csp_nonce }}">
+    (function () {
+      try {
+        if (!window.Telegram || !window.Telegram.WebApp) {
+          return;
+        }
+
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const initData = (tg.initData || "").trim();
+        if (!initData) {
+          return;
+        }
+
+        const onceKey = "tgMiniAutoAuthAttempted";
+        if (window.sessionStorage && sessionStorage.getItem(onceKey) === "1") {
+          return;
+        }
+        if (window.sessionStorage) {
+          sessionStorage.setItem(onceKey, "1");
+        }
+
+        const nextUrl = "{{ (request.args.get('next') or url_for('tg_mini_app')) | e }}";
+        const csrfToken = "{{ csrf_token() | e }}";
+
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = "{{ url_for('auth_telegram_mini') }}";
+        form.style.display = "none";
+
+        const nextInput = document.createElement("input");
+        nextInput.type = "hidden";
+        nextInput.name = "next";
+        nextInput.value = nextUrl;
+        form.appendChild(nextInput);
+
+        const initDataInput = document.createElement("input");
+        initDataInput.type = "hidden";
+        initDataInput.name = "init_data";
+        initDataInput.value = initData;
+        form.appendChild(initDataInput);
+
+        const csrfInput = document.createElement("input");
+        csrfInput.type = "hidden";
+        csrfInput.name = "csrf_token";
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        document.body.appendChild(form);
+        form.submit();
+      } catch (_error) {
+        // Оставляем обычную форму входа как fallback.
+      }
+    })();
+  </script>
+  {% endif %}
+
+  <!--=============== MAIN JS ===============-->
+  <script src="{{ url_for('static', filename='assets/js/notifications.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/main.js') }}"></script>
+</body>
+
+</html>

@@ -1,0 +1,17 @@
+[Unit]
+Description=AdminAntizapret VPN Management
+After=network.target antizapret.service
+Wants=antizapret.service
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/AdminAntizapret
+EnvironmentFile=/opt/AdminAntizapret/.env
+ExecStart=/opt/AdminAntizapret/venv/bin/gunicorn -c /opt/AdminAntizapret/gunicorn.conf.py app:app
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

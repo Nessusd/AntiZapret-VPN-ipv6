@@ -1,0 +1,67 @@
+{% if current_user and current_user.is_admin() %}
+{% if feature_modules.get('openvpn', true) or feature_modules.get('wireguard', true) or feature_modules.get('amneziawg', true) %}
+<div class="add-client-modal" id="addClientModal" hidden>
+  <div class="add-client-backdrop" data-add-client-close></div>
+  <div class="add-client-dialog" role="dialog" aria-modal="true" aria-labelledby="addClientModalTitle">
+    <button type="button" class="add-client-close" data-add-client-close aria-label="Закрыть">×</button>
+    <div class="add-client-header">
+      <h3 id="addClientModalTitle">Добавить конфигурацию</h3>
+      <p>Создание нового профиля OpenVPN или WireGuard/AmneziaWG.</p>
+    </div>
+
+    <form method="post" id="client-form" class="add-client-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+      <div class="form-group add-client-option-group">
+        <label>Выберите действие:</label>
+        <input type="hidden" id="option" name="option" value="" />
+        <div class="add-client-option-buttons" role="group" aria-label="Тип новой конфигурации">
+          {% if feature_modules.get('openvpn', true) %}
+          <button type="button" class="add-client-option-btn" data-option="1">➕ Добавить клиента OpenVPN</button>
+          {% endif %}
+          {% if feature_modules.get('wireguard', true) or feature_modules.get('amneziawg', true) %}
+          <button type="button" class="add-client-option-btn" data-option="4">➕ Добавить WireGuard/AmneziaWG</button>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="form-group" id="client-name-container" style="display: none">
+        <label for="client-name">Имя клиента:</label>
+        <input type="text" id="client-name" name="client-name" placeholder="client_name"
+          data-sanitize="clientname" data-sanitize-max="15" />
+      </div>
+
+      <div class="form-group" id="work-term-container" style="display: none">
+        <label for="work-term" id="cert_expire_label">Срок работы (дни):</label>
+        <input type="number" id="work-term" name="work-term" min="1" max="3650" placeholder="365"
+          data-sanitize="digits" data-sanitize-max="4" />
+      </div>
+
+      {% if ipv6_enabled %}
+      <div class="form-group" id="routed-ipv6-prefix-container" style="display: none">
+        <label for="routed-ipv6-prefix">IPv6-префикс за OpenVPN-клиентом:</label>
+        <input type="text" id="routed-ipv6-prefix" name="routed-ipv6-prefix"
+          placeholder="2001:db8:1234::/64" />
+        <small>Оставьте пустым для обычного конечного устройства. Допустим глобальный префикс от /48 до /64.</small>
+      </div>
+      {% endif %}
+
+      {% if bgp_enabled %}
+      <div class="form-group" id="route-mode-container" style="display: none">
+        <label for="route-mode">Доставка маршрутов:</label>
+        <select id="route-mode" name="route-mode">
+          <option value="static" selected>Статические маршруты</option>
+          <option value="bgp">BGP</option>
+        </select>
+      </div>
+      {% endif %}
+
+      <div class="add-client-actions">
+        <button type="button" class="download-button" data-add-client-close>Отмена</button>
+        <button type="submit" class="btn-primary">Создать</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endif %}

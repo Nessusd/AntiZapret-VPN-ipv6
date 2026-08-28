@@ -1,0 +1,13 @@
+[Unit]
+Description=AdminAntizapret Traffic Sync
+After=network.target antizapret.service
+Wants=antizapret.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/AdminAntizapret
+EnvironmentFile=/opt/AdminAntizapret/.env
+ExecStart=/opt/AdminAntizapret/venv/bin/python3 /opt/AdminAntizapret/utils/traffic_sync.py
+Environment=PYTHONUNBUFFERED=1

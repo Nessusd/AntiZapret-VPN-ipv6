@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Маршрутизация{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='assets/css/settings_page_shared.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='assets/css/routing_styles.css') }}" />
+{% endblock %}
+
+{% block content %}
+{% include "partials/routing/_layout_start.html" %}
+{% include "partials/routing/_tab_antizapret_config.html" %}
+{% include "partials/routing/_tab_cidr_update.html" %}
+{% include "partials/routing/_tab_game_filters.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='assets/js/settings_page_common.js') }}"></script>
+<script src="{{ url_for('static', filename='assets/js/routing-game-filters.js') }}"></script>
+<script src="{{ url_for('static', filename='assets/js/routing.js') }}"></script>
+{% include "partials/routing/_scripts.html" %}
+{% endblock %}

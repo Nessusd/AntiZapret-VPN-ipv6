@@ -1,0 +1,234 @@
+from routes.admin_routes import register_admin_routes
+from routes.routing import register_routing_routes
+from routes.auth_routes import register_auth_routes
+from routes.config_routes import register_config_routes
+from routes.edit_files import register_edit_files_routes
+from routes.index import register_index_routes
+from routes.logs_dashboard import register_logs_dashboard_routes
+from ip_blocked import register_ip_blocked_routes
+from tg_mini import register_tg_mini_routes
+from routes.server_monitor import register_server_monitor_routes
+from routes.settings import register_settings_routes
+
+
+def register_all_routes(app, sock, deps):
+    g = deps.__getitem__
+
+    register_auth_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        captcha_generator=g("captcha_generator"),
+        ip_restriction=g("ip_restriction"),
+        limiter=g("limiter"),
+        db=g("db"),
+        user_model=g("User"),
+        get_env_value=g("_get_env_value"),
+        touch_active_web_session=g("_touch_active_web_session"),
+        remove_active_web_session=g("_remove_active_web_session"),
+        log_telegram_audit_event=g("_log_telegram_audit_event"),
+        log_user_action_event=g("_log_user_action_event"),
+        send_tg_admin_notification=g("_send_tg_admin_notification"),
+    )
+
+    register_ip_blocked_routes(app, ip_restriction=g("ip_restriction"))
+
+    register_config_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        file_validator=g("file_validator"),
+        db=g("db"),
+        user_model=g("User"),
+        viewer_config_access_model=g("ViewerConfigAccess"),
+        qr_download_token_model=g("QrDownloadToken"),
+        client_name_pattern=g("CLIENT_NAME_PATTERN"),
+        group_folders=g("GROUP_FOLDERS"),
+        result_dir_files=g("RESULT_DIR_FILES"),
+        ensure_client_connect_ban_check_block=g("_ensure_client_connect_ban_check_block"),
+        openvpn_set_temp_block_days=g("_openvpn_set_temp_block_days"),
+        openvpn_set_permanent_block=g("_openvpn_set_permanent_block"),
+        openvpn_clear_block=g("_openvpn_clear_block"),
+        openvpn_set_traffic_limit_bytes=g("_openvpn_set_traffic_limit_bytes"),
+        openvpn_clear_traffic_limit=g("_openvpn_clear_traffic_limit"),
+        openvpn_reconcile_client_policy=g("_openvpn_reconcile_client_policy"),
+        human_bytes=g("_human_bytes"),
+        get_config_type=g("_get_config_type"),
+        resolve_config_file=g("_resolve_config_file"),
+        create_one_time_download_url=g("_create_one_time_download_url"),
+        log_qr_event=g("_log_qr_event"),
+        qr_generator=g("qr_generator"),
+        enqueue_background_task=g("_enqueue_background_task"),
+        task_run_doall=g("_task_run_doall"),
+        task_accepted_response=g("_task_accepted_response"),
+        io_executor=g("io_bound_executor"),
+        set_env_value=g("_set_env_value"),
+        get_public_download_enabled=g("_get_public_download_enabled"),
+        set_public_download_enabled=g("_set_public_download_enabled"),
+        log_telegram_audit_event=g("_log_telegram_audit_event"),
+        log_user_action_event=g("_log_user_action_event"),
+        limiter=g("limiter"),
+        get_client_ip=g("_get_client_ip"),
+    )
+
+    register_edit_files_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        file_editor=g("file_editor"),
+        enqueue_background_task=g("_enqueue_background_task"),
+        task_run_doall=g("_task_run_doall"),
+        task_accepted_response=g("_task_accepted_response"),
+        get_public_download_enabled=g("_get_public_download_enabled"),
+    )
+
+    register_admin_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        db=g("db"),
+        background_task_model=g("BackgroundTask"),
+        user_model=g("User"),
+        viewer_config_access_model=g("ViewerConfigAccess"),
+        collect_all_configs_for_access=g("collect_all_configs_for_access"),
+        normalize_openvpn_group_key=g("normalize_openvpn_group_key"),
+        normalize_conf_group_key=g("normalize_conf_group_key"),
+        serialize_background_task=g("_serialize_background_task"),
+        enqueue_background_task=g("_enqueue_background_task"),
+        task_restart_service=g("_task_restart_service"),
+        task_accepted_response=g("_task_accepted_response"),
+        log_user_action_event=g("_log_user_action_event"),
+    )
+
+    register_settings_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        db=g("db"),
+        user_model=g("User"),
+        active_web_session_model=g("ActiveWebSession"),
+        qr_download_audit_log_model=g("QrDownloadAuditLog"),
+        telegram_mini_audit_log_model=g("TelegramMiniAuditLog"),
+        user_action_log_model=g("UserActionLog"),
+        ip_restriction=g("ip_restriction"),
+        ip_manager=g("ip_manager"),
+        collect_all_openvpn_files_for_access=g("collect_all_openvpn_files_for_access"),
+        collect_all_configs_for_access=g("collect_all_configs_for_access"),
+        build_openvpn_access_groups=g("build_openvpn_access_groups"),
+        config_file_handler=g("config_file_handler"),
+        group_folders=g("GROUP_FOLDERS"),
+        build_conf_access_groups=g("build_conf_access_groups"),
+        enqueue_background_task=g("_enqueue_background_task"),
+        task_restart_service=g("_task_restart_service"),
+        set_env_value=g("_set_env_value"),
+        get_env_value=g("_get_env_value"),
+        to_bool=g("_to_bool"),
+        is_valid_cron_expression=g("_is_valid_cron_expression"),
+        ensure_nightly_idle_restart_cron=g("_ensure_nightly_idle_restart_cron"),
+        ensure_app_backup_cron=g("_ensure_app_backup_cron"),
+        ensure_traffic_sync_cron=g("_ensure_traffic_sync_cron"),
+        ensure_wg_policy_sync_cron=g("_ensure_wg_policy_sync_cron"),
+        ensure_runtime_backup_cleanup_cron=g("_ensure_runtime_backup_cleanup_cron"),
+        get_nightly_idle_restart_settings=g("_get_nightly_idle_restart_settings"),
+        get_backup_settings=g("_get_backup_settings"),
+        set_nightly_idle_restart_settings=g("_set_nightly_idle_restart_settings"),
+        set_backup_settings=g("_set_backup_settings"),
+        get_active_web_session_settings=g("_get_active_web_session_settings"),
+        set_active_web_session_settings=g("_set_active_web_session_settings"),
+        get_public_download_enabled=g("_get_public_download_enabled"),
+        backup_manager_service=g("backup_manager_service"),
+        maintenance_scheduler_service=g("maintenance_scheduler_service"),
+        runtime_set=g("_runtime_set"),
+        app_root=g("APP_ROOT"),
+        log_telegram_audit_event=g("_log_telegram_audit_event"),
+        log_user_action_event=g("_log_user_action_event"),
+        cidr_db_updater_service=g("cidr_db_updater_service"),
+    )
+
+    register_routing_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        ip_manager=g("ip_manager"),
+        get_env_value=g("_get_env_value"),
+    )
+
+    register_index_routes(
+        app,
+        auth_manager=g("auth_manager"),
+        get_env_value=g("_get_env_value"),
+        db=g("db"),
+        user_model=g("User"),
+        config_file_handler=g("config_file_handler"),
+        file_validator=g("file_validator"),
+        group_folders=g("GROUP_FOLDERS"),
+        read_banned_clients=g("_read_banned_clients"),
+        openvpn_build_status_map=g("_openvpn_build_status_map"),
+        openvpn_reconcile_all_policies=g("_openvpn_reconcile_all_policies"),
+        extract_client_name_from_config_file=g("_extract_client_name_from_config_file"),
+        get_logs_dashboard_data_cached=g("_get_logs_dashboard_data_cached"),
+        human_bytes=g("_human_bytes"),
+        script_executor=g("script_executor"),
+        sync_wireguard_peer_cache_from_configs=g("_sync_wireguard_peer_cache_from_configs"),
+        wg_build_status_map=g("_wg_build_status_map"),
+        wg_set_expiry_days=g("_wg_set_expiry_days"),
+        wg_set_temp_block_days=g("_wg_set_temp_block_days"),
+        wg_set_permanent_block=g("_wg_set_permanent_block"),
+        wg_clear_temp_block=g("_wg_clear_temp_block"),
+        wg_set_traffic_limit_bytes=g("_wg_set_traffic_limit_bytes"),
+        wg_clear_traffic_limit=g("_wg_clear_traffic_limit"),
+        wg_reconcile_client_policy=g("_wg_reconcile_client_policy"),
+        wg_reconcile_all_policies=g("_wg_reconcile_all_policies"),
+        log_telegram_audit_event=g("_log_telegram_audit_event"),
+        log_user_action_event=g("_log_user_action_event"),
+        send_tg_admin_notification=g("_send_tg_admin_notification"),
+        client_name_pattern=g("CLIENT_NAME_PATTERN"),
+    )
+
+    register_server_monitor_routes(
+        app,
+        sock,
+        auth_manager=g("auth_manager"),
+        server_monitor_proc=g("server_monitor_proc"),
+    )
+
+    register_logs_dashboard_routes(
+        app,
+        sock,
+        auth_manager=g("auth_manager"),
+        get_logs_dashboard_data_cached=g("_get_logs_dashboard_data_cached"),
+        cleanup_status_logs_now=g("_cleanup_status_logs_now"),
+        set_status_cleanup_schedule=g("_set_status_cleanup_schedule"),
+        normalize_traffic_protocol_scope=g("_normalize_traffic_protocol_scope"),
+        reset_persisted_traffic_data=g("_reset_persisted_traffic_data"),
+        collect_existing_config_client_names=g("_collect_existing_config_client_names"),
+        normalize_traffic_client_identity=g("_normalize_traffic_client_identity"),
+        delete_client_traffic_stats=g("_delete_client_traffic_stats"),
+        queue_logs_dashboard_refresh_after_traffic_mutation=g("_queue_logs_dashboard_refresh_after_traffic_mutation"),
+        openvpn_log_tail_lines=g("OPENVPN_LOG_TAIL_LINES"),
+        db=g("db"),
+        background_task_model=g("BackgroundTask"),
+        collect_config_protocols_by_client=g("_collect_config_protocols_by_client"),
+        user_traffic_sample_model=g("UserTrafficSample"),
+        human_bytes=g("_human_bytes"),
+    )
+
+    register_tg_mini_routes(
+        app,
+        sock,
+        auth_manager=g("auth_manager"),
+        get_logs_dashboard_data_cached=g("_get_logs_dashboard_data_cached"),
+        user_traffic_sample_model=g("UserTrafficSample"),
+        human_bytes=g("_human_bytes"),
+        user_model=g("User"),
+        viewer_config_access_model=g("ViewerConfigAccess"),
+        resolve_config_file=g("_resolve_config_file"),
+        get_config_type=g("_get_config_type"),
+        io_executor=g("io_bound_executor"),
+        log_telegram_audit_event=g("_log_telegram_audit_event"),
+        log_user_action_event=g("_log_user_action_event"),
+        enqueue_background_task=g("_enqueue_background_task"),
+        task_restart_service=g("_task_restart_service"),
+        set_env_value=g("_set_env_value"),
+        get_env_value=g("_get_env_value"),
+        is_valid_cron_expression=g("_is_valid_cron_expression"),
+        ensure_nightly_idle_restart_cron=g("_ensure_nightly_idle_restart_cron"),
+        get_nightly_idle_restart_settings=g("_get_nightly_idle_restart_settings"),
+        set_nightly_idle_restart_settings=g("_set_nightly_idle_restart_settings"),
+        get_active_web_session_settings=g("_get_active_web_session_settings"),
+        set_active_web_session_settings=g("_set_active_web_session_settings"),
+    )

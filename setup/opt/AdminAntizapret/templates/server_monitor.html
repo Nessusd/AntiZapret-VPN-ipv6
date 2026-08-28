@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Мониторинг сервера{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='assets/css/server_monitor_styles.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='assets/css/charts.css') }}">
+{% endblock %}
+{% block content %}
+{% include "partials/server_monitor/_layout.html" %}
+{% endblock %}
+{% block scripts %}
+{% include "partials/server_monitor/_scripts.html" %}
+{% endblock %}

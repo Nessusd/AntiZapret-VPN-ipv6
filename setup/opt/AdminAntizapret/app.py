@@ -1,0 +1,1412 @@
+from flask import (
+    Flask,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    session,
+    jsonify,
+    abort,
+)
+from flask_sock import Sock
+import subprocess
+import os
+import re
+import json
+import glob
+import socket
+import sys
+import hashlib
+import secrets
+from datetime import datetime, timezone, timedelta
+import shlex
+from threading import RLock
+from core.services.admin_notify import (
+    AdminNotifyService,
+    CLIENT_BLOCK_NOTIFY_EVENTS,
+    SETTINGS_CHANGE_NOTIFY,
+)
+from flask_wtf.csrf import CSRFProtect
+from dotenv import load_dotenv
+import time
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from concurrent.futures import ThreadPoolExecutor
+
+try:
+    from flask_limiter import Limiter
+except ImportError:
+    Limiter = None
+
+#Импорт файла с параметрами
+from utils.ip_restriction import ip_restriction
+from config.antizapret_params import ANTIZAPRET_PARAMS
+from config.app_paths import (
+    CLIENT_CONNECT_BAN_CHECK_BLOCK,
+    CLIENT_NAME_PATTERN,
+    CONFIG_PATHS,
+    GROUP_FOLDERS,
+    MAX_CERT_EXPIRE,
+    MIN_CERT_EXPIRE,
+    OPENVPN_BANNED_CLIENTS_FILE,
+    OPENVPN_CLIENT_CONNECT_SCRIPT,
+    OPENVPN_FOLDERS,
+    RESULT_DIR_FILES,
+)
+from ips import ip_manager
+from routes.route_wiring import register_all_routes
+from core.models import (
+    ActiveWebSession,
+    AntifilterCidr,
+    AntifilterMeta,
+    BackgroundTask,
+    CidrDbRefreshLog,
+    CidrPreset,
+    LogsDashboardCache,
+    OpenVPNPeerInfoCache,
+    OpenVPNPeerInfoHistory,
+    OpenVpnAccessPolicy,
+    ProviderCidr,
+    ProviderMeta,
+    QrDownloadAuditLog,
+    QrDownloadToken,
+    TelegramMiniAuditLog,
+    TrafficSessionState,
+    User,
+    UserActionLog,
+    UserTrafficSample,
+    UserTrafficStat,
+    UserTrafficStatProtocol,
+    ViewerConfigAccess,
+    WireGuardPeerCache,
+    WgAccessPolicy,
+    db,
+)
+from core.services.cidr_db_updater import CidrDbUpdaterService
+from core.services.settings.cidr_tasks import init_cidr_task_db
+from core.services.logs_dashboard.collector import collect_logs_dashboard_data as collect_logs_dashboard_data_service
+from core.services.request_user import get_user_by_username
+from core.services import (
+    ActiveWebSessionService,
+    AuthenticationManager,
+    BackgroundTaskService,
+    CaptchaGenerator,
+    ClientProtocolCatalogService,
+    ConfigAccessService,
+    ConfigFileHandler,
+    DatabaseMigrationService,
+    EnvFileService,
+    FileEditor,
+    FileValidator,
+    LogsDashboardCacheService,
+    MaintenanceSchedulerService,
+    NetworkStatusCollectorService,
+    OpenVPNBanlistService,
+    OpenVpnAccessPolicyService,
+    OpenVPNSocketReaderService,
+    PeerInfoCacheService,
+    QrDownloadTokenService,
+    QRGenerator,
+    RuntimeSettingsService,
+    ScriptExecutor,
+    ServerMonitor,
+    build_services,
+    TrafficMaintenanceService,
+    TrafficPersistenceService,
+    WgAccessPolicyService,
+    register_current_user_context_processor,
+)
+from utils.wg_awg_runtime_enforcer import WgAwgRuntimeEnforcer
+from core.bootstrap import create_app, _get_client_ip
+from core.services.http_security import (
+    apply_security_headers,
+    build_robots_txt,
+    build_security_txt,
+    get_csp_nonce,
+    get_panel_branding,
+)
+
+
+# Абсолютный путь к корню приложения и .env (не зависит от рабочего каталога процесса).
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE_PATH = os.path.join(APP_ROOT, ".env")
+_SKIP_APP_BOOTSTRAP = os.getenv("ADMIN_ANTIZAPRET_SKIP_APP_BOOTSTRAP", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+# Загрузка переменных окружения из .env файла
+load_dotenv(dotenv_path=ENV_FILE_PATH)
+
+port = int(os.getenv("APP_PORT", "5050"))
+
+# Application factory: создание Flask-приложения и инициализация расширений
+# (SQLAlchemy, CSRF, WebSocket, rate limiter, WAL-режим SQLite) вынесены в
+# core/bootstrap.py. Объект `app` остаётся атрибутом модуля для Gunicorn (app:app).
+app, sock, csrf, limiter = create_app()
+
+_runtime_state_lock = RLock()
+_runtime_state = {
+    "PUBLIC_DOWNLOAD_ENABLED": os.getenv("PUBLIC_DOWNLOAD_ENABLED", "false").lower() == "true",
+}
+
+
+def _runtime_get(key, default=None):
+    with _runtime_state_lock:
+        return _runtime_state.get(key, default)
+
+
+def _runtime_set(key, value):
+    with _runtime_state_lock:
+        _runtime_state[key] = value
+
+
+def _get_public_download_enabled():
+    return bool(_runtime_get("PUBLIC_DOWNLOAD_ENABLED", False))
+
+
+def _set_public_download_enabled(value):
+    _runtime_set("PUBLIC_DOWNLOAD_ENABLED", bool(value))
+
+try:
+    BACKGROUND_TASK_WORKERS = max(1, int(os.getenv("BACKGROUND_TASK_WORKERS", "2")))
+except (TypeError, ValueError):
+    BACKGROUND_TASK_WORKERS = 2
+
+BACKGROUND_TASK_MAX_OUTPUT_CHARS = 12000
+background_task_executor = ThreadPoolExecutor(
+    max_workers=BACKGROUND_TASK_WORKERS,
+    thread_name_prefix="adminantizapret-task",
+)
+
+try:
+    IO_BOUND_WORKERS = max(2, int(os.getenv("IO_BOUND_WORKERS", "8")))
+except (TypeError, ValueError):
+    IO_BOUND_WORKERS = 8
+
+io_bound_executor = ThreadPoolExecutor(
+    max_workers=IO_BOUND_WORKERS,
+    thread_name_prefix="adminantizapret-io",
+)
+
+env_file_service = EnvFileService(ENV_FILE_PATH)
+
+
+def _set_env_value(key, value):
+    return env_file_service.set_env_value(key, value)
+
+
+def _get_env_value(key, default=""):
+    return env_file_service.get_env_value(key, default=default)
+
+
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_valid_cron_expression(expr):
+    value = (expr or "").strip()
+    parts = value.split()
+    if len(parts) != 5:
+        return False
+    token_pattern = re.compile(r"^[0-9*/,\-]+$")
+    return all(token_pattern.fullmatch(part or "") for part in parts)
+
+openvpn_banlist_service = OpenVPNBanlistService(
+    banned_clients_file=OPENVPN_BANNED_CLIENTS_FILE,
+    client_connect_script=OPENVPN_CLIENT_CONNECT_SCRIPT,
+    client_connect_ban_check_block=CLIENT_CONNECT_BAN_CHECK_BLOCK,
+)
+
+
+def _read_banned_clients():
+    return openvpn_banlist_service.read_banned_clients()
+
+
+def _write_banned_clients(clients):
+    return openvpn_banlist_service.write_banned_clients(clients)
+
+
+def _ensure_client_connect_ban_check_block():
+    return openvpn_banlist_service.ensure_client_connect_ban_check_block()
+
+
+def normalize_openvpn_group_key(filename):
+    return config_access_service.normalize_openvpn_group_key(filename)
+
+
+def collect_all_openvpn_files_for_access():
+    return config_access_service.collect_all_openvpn_files_for_access()
+
+
+def build_openvpn_access_groups(openvpn_paths):
+    return config_access_service.build_openvpn_access_groups(openvpn_paths)
+
+
+def normalize_conf_group_key(filename, config_type):
+    return config_access_service.normalize_conf_group_key(filename, config_type)
+
+
+def build_conf_access_groups(conf_paths, config_type):
+    return config_access_service.build_conf_access_groups(conf_paths, config_type)
+
+
+def collect_all_configs_for_access(config_type):
+    return config_access_service.collect_all_configs_for_access(config_type)
+
+# Инициализация классов (script_executor — после runtime_settings, см. ниже)
+config_file_handler = ConfigFileHandler(CONFIG_PATHS)
+config_access_service = ConfigAccessService(
+    config_file_handler=config_file_handler,
+    group_folders=GROUP_FOLDERS,
+    config_paths=CONFIG_PATHS,
+    openvpn_folders=OPENVPN_FOLDERS,
+)
+auth_manager = AuthenticationManager(User, ip_restriction)
+captcha_generator = CaptchaGenerator()
+file_validator = FileValidator(CONFIG_PATHS, fallback_openvpn_folders=OPENVPN_FOLDERS)
+qr_generator = QRGenerator()
+file_editor = FileEditor()
+server_monitor_proc = ServerMonitor()
+client_protocol_catalog_service = ClientProtocolCatalogService(
+    openvpn_folders=OPENVPN_FOLDERS,
+    config_paths=CONFIG_PATHS,
+    db=db,
+    user_traffic_sample_model=UserTrafficSample,
+    human_bytes=lambda value: _human_bytes(value),
+)
+
+qr_download_token_service = QrDownloadTokenService(
+    db=db,
+    config_paths=CONFIG_PATHS,
+    user_model=User,
+    qr_download_token_model=QrDownloadToken,
+    qr_download_audit_log_model=QrDownloadAuditLog,
+    logger=app.logger,
+)
+
+database_migration_service = DatabaseMigrationService(
+    app=app,
+    db=db,
+)
+
+def _get_config_type(file_path):
+    """Define config type by directory path."""
+    p = file_path.lower()
+    if '/openvpn/' in p:
+        return 'openvpn'
+    elif '/wireguard/' in p:
+        return 'wg'
+    elif '/amneziawg/' in p:
+        return 'amneziawg'
+    return None
+
+
+def _resolve_config_file(file_type, filename):
+    """Находит путь к конфигу по типу и имени файла."""
+    if file_type not in CONFIG_PATHS:
+        return None, None
+
+    def _scan(dirs):
+        for config_dir in dirs:
+            for root, _, files in os.walk(config_dir):
+                for file in files:
+                    if file.replace("(", "").replace(")", "") == filename.replace("(", "").replace(")", ""):
+                        return os.path.join(root, file), file.replace("(", "").replace(")", "")
+        return None, None
+
+    file_path, clean_name = _scan(CONFIG_PATHS[file_type])
+    if not file_path and file_type == "openvpn":
+        file_path, clean_name = _scan(OPENVPN_FOLDERS)
+    return file_path, clean_name
+
+
+def _create_one_time_download_url(file_path):
+    return qr_download_token_service.create_one_time_download_url(
+        file_path,
+        get_env_value=_get_env_value,
+    )
+
+
+def _log_qr_event(event_type, token_row=None, details=None):
+    return qr_download_token_service.log_qr_event(
+        event_type,
+        token_row=token_row,
+        details=details,
+    )
+
+
+def _log_telegram_audit_event(
+    event_type,
+    config_name=None,
+    details=None,
+    actor_username=None,
+    telegram_id=None,
+    mirror_user_action=True,
+):
+    """Writes Telegram/Mini App audit events without affecting primary workflow.
+    Also logs to UserActionLog with 'miniapp:' prefix to show in main action logs."""
+    try:
+        username = str(actor_username or session.get("username") or "").strip() or None
+        actor_user_id = None
+        resolved_telegram_id = str(telegram_id or session.get("telegram_mini_id") or "").strip()
+
+        if username:
+            actor = get_user_by_username(User, username)
+            if actor:
+                actor_user_id = actor.id
+                if not resolved_telegram_id:
+                    resolved_telegram_id = str(getattr(actor, "telegram_id", "") or "").strip()
+
+        remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
+        user_agent = (request.headers.get("User-Agent") or "")[:255]
+
+        db.session.add(
+            TelegramMiniAuditLog(
+                actor_user_id=actor_user_id,
+                actor_username=username,
+                telegram_id=(resolved_telegram_id or None),
+                event_type=str(event_type or "unknown")[:64],
+                config_name=(str(config_name or "").strip() or None),
+                details=(str(details or "")[:255] or None),
+                remote_addr=(remote_addr or None),
+                user_agent=(user_agent or None),
+            )
+        )
+        db.session.commit()
+
+        if mirror_user_action:
+            # Also log to UserActionLog with miniapp tag.
+            try:
+                db.session.add(
+                    UserActionLog(
+                        actor_user_id=actor_user_id,
+                        actor_username=username,
+                        event_type=f"miniapp:{str(event_type or 'unknown')[:59]}",  # Prefix with 'miniapp:' (max 64 chars)
+                        target_type="telegram_miniapp",
+                        target_name=(str(config_name or "").strip()[:255] or None),
+                        status="success",
+                        details=(str(details or "")[:255] or None),
+                        remote_addr=(remote_addr or None),
+                        user_agent=(user_agent or None),
+                    )
+                )
+                db.session.commit()
+            except SQLAlchemyError as e2:
+                db.session.rollback()
+                app.logger.warning("Не удалось записать событие Telegram audit в UserActionLog: %s", e2)
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.warning("Не удалось записать событие Telegram audit: %s", e)
+
+
+
+def _log_user_action_event(
+    event_type,
+    *,
+    target_type=None,
+    target_name=None,
+    details=None,
+    status="success",
+    actor_username=None,
+):
+    """Writes user action audit events without affecting primary workflow."""
+    username = None
+    remote_addr = None
+    try:
+        username = str(actor_username or session.get("username") or "").strip() or None
+        actor_user_id = None
+        if username:
+            actor = get_user_by_username(User, username)
+            if actor:
+                actor_user_id = actor.id
+
+        remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
+        user_agent = (request.headers.get("User-Agent") or "")[:255]
+
+        db.session.add(
+            UserActionLog(
+                actor_user_id=actor_user_id,
+                actor_username=username,
+                event_type=str(event_type or "unknown")[:64],
+                target_type=(str(target_type or "").strip()[:32] or None),
+                target_name=(str(target_name or "").strip()[:255] or None),
+                status=(str(status or "success").strip()[:16] or "success"),
+                details=(str(details or "")[:255] or None),
+                remote_addr=(remote_addr or None),
+                user_agent=(user_agent or None),
+            )
+        )
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.warning("Не удалось записать событие UserAction audit: %s", e)
+        return
+
+    # Fire Telegram notification for mapped events
+    if status in ("error", "warning"):
+        return
+    try:
+        _notify_type = None
+        _notify_target = target_name
+        _settings_subject = None
+        if event_type in ("config_delete", "config_create", "config_recreate"):
+            _notify_type = event_type
+        elif event_type == "settings_user_create":
+            _notify_type = "user_create"
+        elif event_type == "settings_user_delete":
+            _notify_type = "user_delete"
+        elif event_type in CLIENT_BLOCK_NOTIFY_EVENTS:
+            _notify_type = "client_ban"
+        elif event_type in SETTINGS_CHANGE_NOTIFY:
+            _notify_type = "settings_change"
+            _settings_subject = target_name
+            _notify_target = event_type
+        if _notify_type:
+            from core.services.notify_time import get_client_timezone_from_request
+
+            _send_tg_admin_notification(
+                _notify_type,
+                actor_username=username,
+                target_name=_notify_target,
+                target_type=target_type,
+                remote_addr=remote_addr,
+                details=details,
+                subject_name=_settings_subject,
+                client_timezone=get_client_timezone_from_request(),
+            )
+    except Exception:
+        pass
+
+
+app.config["TELEGRAM_AUDIT_LOGGER"] = _log_telegram_audit_event
+app.config["USER_ACTION_AUDIT_LOGGER"] = _log_user_action_event
+
+
+background_task_service = BackgroundTaskService(
+    app=app,
+    db=db,
+    background_task_model=BackgroundTask,
+    executor=background_task_executor,
+    max_output_chars=BACKGROUND_TASK_MAX_OUTPUT_CHARS,
+    app_root=APP_ROOT,
+)
+
+try:
+    with app.app_context():
+        _recovered_stale_tasks = background_task_service.recover_stale_background_tasks()
+        if _recovered_stale_tasks:
+            app.logger.warning(
+                "Помечено как failed %s зависших фоновых задач после старта процесса",
+                _recovered_stale_tasks,
+            )
+except Exception as _stale_tasks_exc:
+    app.logger.warning(
+        "Не удалось восстановить зависшие фоновые задачи при старте: %s",
+        _stale_tasks_exc,
+    )
+
+
+def _serialize_background_task(task):
+    return background_task_service.serialize_background_task(task)
+
+
+def _enqueue_background_task(task_type, task_callable, created_by_username=None, queued_message=None):
+    return background_task_service.enqueue_background_task(
+        task_type,
+        task_callable,
+        created_by_username=created_by_username,
+        queued_message=queued_message,
+    )
+
+
+def _task_accepted_response(task, message):
+    return background_task_service.task_accepted_response(
+        task,
+        message,
+        status_endpoint="api_task_status",
+    )
+
+
+def _run_checked_command(args, cwd=None, timeout=120):
+    return background_task_service.run_checked_command(args, cwd=cwd, timeout=timeout)
+
+
+def _task_run_doall():
+    return background_task_service.task_run_doall(
+        sync_wireguard_peer_cache_callback=_sync_wireguard_peer_cache_from_configs,
+    )
+
+
+def _task_restart_service():
+    return background_task_service.task_restart_service()
+
+
+def _get_logs_dashboard_data_cached(created_by_username=None):
+    background_task_service.recover_stale_background_tasks(
+        task_types=["logs_dashboard_refresh"]
+    )
+    return logs_dashboard_cache_service.get_logs_dashboard_data_cached(created_by_username=created_by_username)
+
+def _run_db_migrations():
+    return database_migration_service.run_db_migrations()
+
+
+_run_db_migrations()
+
+init_cidr_task_db(app, db, BackgroundTask)
+
+cidr_db_updater_service = CidrDbUpdaterService(db=db)
+
+try:
+    with app.app_context():
+        cidr_db_updater_service.seed_builtin_presets()
+        cidr_db_updater_service.cleanup_retired_provider_data()
+except Exception as _e:
+    app.logger.warning(f"Не удалось инициализировать CIDR-пресеты и очистку провайдеров: {_e}")
+
+
+register_current_user_context_processor(app, session, User)
+
+
+@app.context_processor
+def _inject_panel_branding():
+    return get_panel_branding(os.environ)
+
+
+@app.context_processor
+def _inject_csp_nonce():
+    # Прокидываем per-request CSP nonce в шаблоны (атрибут nonce="..." на inline
+    # <script>). Тот же nonce попадает в заголовок Content-Security-Policy.
+    return {"csp_nonce": get_csp_nonce()}
+
+
+@app.context_processor
+def _inject_feature_modules():
+    from core.services.feature_toggles import get_app_module_states
+
+    return {"feature_modules": get_app_module_states(get_env_value=_get_env_value)}
+
+
+@app.after_request
+def _apply_http_security_headers(response):
+    apply_security_headers(response, request.path or "")
+    return response
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    from flask import Response
+
+    return Response(build_robots_txt(), mimetype="text/plain")
+
+
+@app.route("/.well-known/security.txt")
+def security_txt():
+    from flask import Response
+
+    return Response(build_security_txt(get_panel_branding(os.environ)), mimetype="text/plain")
+
+
+runtime_settings_service = RuntimeSettingsService(
+    get_env_value=_get_env_value,
+    logs_dir="/etc/openvpn/server/logs",
+)
+runtime_settings = runtime_settings_service.load()
+
+LOGS_DIR = runtime_settings["LOGS_DIR"]
+OPENVPN_SOCKET_DIR = runtime_settings["OPENVPN_SOCKET_DIR"]
+OPENVPN_SOCKET_TIMEOUT = runtime_settings["OPENVPN_SOCKET_TIMEOUT"]
+OPENVPN_SOCKET_IDLE_TIMEOUT = runtime_settings["OPENVPN_SOCKET_IDLE_TIMEOUT"]
+OPENVPN_LOG_TAIL_LINES = runtime_settings["OPENVPN_LOG_TAIL_LINES"]
+OPENVPN_EVENT_MAX_RESPONSE_BYTES = runtime_settings["OPENVPN_EVENT_MAX_RESPONSE_BYTES"]
+OPENVPN_PEER_INFO_CACHE_TTL_SECONDS = runtime_settings["OPENVPN_PEER_INFO_CACHE_TTL_SECONDS"]
+OPENVPN_PEER_INFO_HISTORY_RETENTION_SECONDS = runtime_settings["OPENVPN_PEER_INFO_HISTORY_RETENTION_SECONDS"]
+TRAFFIC_DB_STALE_SECONDS = runtime_settings["TRAFFIC_DB_STALE_SECONDS"]
+TRAFFIC_SYNC_CRON_MARKER = runtime_settings["TRAFFIC_SYNC_CRON_MARKER"]
+TRAFFIC_SYNC_CRON_EXPR = runtime_settings["TRAFFIC_SYNC_CRON_EXPR"]
+TRAFFIC_SYNC_ENABLED = runtime_settings["TRAFFIC_SYNC_ENABLED"]
+WG_POLICY_SYNC_CRON_MARKER = runtime_settings["WG_POLICY_SYNC_CRON_MARKER"]
+WG_POLICY_SYNC_CRON_EXPR = runtime_settings["WG_POLICY_SYNC_CRON_EXPR"]
+WG_POLICY_SYNC_ENABLED = runtime_settings["WG_POLICY_SYNC_ENABLED"]
+NIGHTLY_IDLE_RESTART_MARKER = runtime_settings["NIGHTLY_IDLE_RESTART_MARKER"]
+APP_BACKUP_CRON_MARKER = runtime_settings["APP_BACKUP_CRON_MARKER"]
+APP_BACKUP_ROOT = runtime_settings["APP_BACKUP_ROOT"]
+APP_BACKUP_RETENTION_COUNT = runtime_settings["APP_BACKUP_RETENTION_COUNT"]
+APP_BACKUP_SERVICE_NAME = runtime_settings["APP_BACKUP_SERVICE_NAME"]
+RUNTIME_BACKUP_CLEANUP_MARKER = runtime_settings["RUNTIME_BACKUP_CLEANUP_MARKER"]
+RUNTIME_BACKUP_CLEANUP_CRON_EXPR = runtime_settings["RUNTIME_BACKUP_CLEANUP_CRON_EXPR"]
+RUNTIME_BACKUP_RETENTION_HOURS = runtime_settings["RUNTIME_BACKUP_RETENTION_HOURS"]
+RUNTIME_BACKUP_CLEANUP_ENABLED = runtime_settings["RUNTIME_BACKUP_CLEANUP_ENABLED"]
+MONITOR_ENABLED = runtime_settings["MONITOR_ENABLED"]
+ACTIVE_WEB_SESSION_TRACKING_ENABLED = runtime_settings["ACTIVE_WEB_SESSION_TRACKING_ENABLED"]
+RUNTIME_BACKUP_ROOT = os.path.join(APP_ROOT, "ips", "runtime_backups")
+_runtime_set("NIGHTLY_IDLE_RESTART_CRON_EXPR", runtime_settings["NIGHTLY_IDLE_RESTART_CRON_EXPR"])
+_runtime_set("NIGHTLY_IDLE_RESTART_ENABLED", runtime_settings["NIGHTLY_IDLE_RESTART_ENABLED"])
+_runtime_set("APP_BACKUP_ENABLED", runtime_settings["APP_BACKUP_ENABLED"])
+_runtime_set("APP_BACKUP_INTERVAL_DAYS", runtime_settings["APP_BACKUP_INTERVAL_DAYS"])
+_runtime_set("APP_BACKUP_TIME", runtime_settings["APP_BACKUP_TIME"])
+_runtime_set("APP_BACKUP_COMPONENTS", runtime_settings["APP_BACKUP_COMPONENTS"])
+_runtime_set("APP_BACKUP_TG_ENABLED", runtime_settings["APP_BACKUP_TG_ENABLED"])
+_runtime_set("APP_BACKUP_TG_ADMIN_IDS", runtime_settings["APP_BACKUP_TG_ADMIN_IDS"])
+_runtime_set("APP_BACKUP_AZ_ENABLED", runtime_settings["APP_BACKUP_AZ_ENABLED"])
+_runtime_set("APP_BACKUP_AZ_INSTALL_DIR", runtime_settings["APP_BACKUP_AZ_INSTALL_DIR"])
+_runtime_set("ACTIVE_WEB_SESSION_TTL_SECONDS", runtime_settings["ACTIVE_WEB_SESSION_TTL_SECONDS"])
+_runtime_set(
+    "ACTIVE_WEB_SESSION_TOUCH_INTERVAL_SECONDS",
+    runtime_settings["ACTIVE_WEB_SESSION_TOUCH_INTERVAL_SECONDS"],
+)
+_runtime_set("TRAFFIC_SYNC_ENABLED", runtime_settings["TRAFFIC_SYNC_ENABLED"])
+_runtime_set("WG_POLICY_SYNC_ENABLED", runtime_settings["WG_POLICY_SYNC_ENABLED"])
+_runtime_set("MONITOR_ENABLED", runtime_settings["MONITOR_ENABLED"])
+_runtime_set(
+    "ACTIVE_WEB_SESSION_TRACKING_ENABLED",
+    runtime_settings["ACTIVE_WEB_SESSION_TRACKING_ENABLED"],
+)
+_runtime_set(
+    "RUNTIME_BACKUP_CLEANUP_ENABLED",
+    runtime_settings["RUNTIME_BACKUP_CLEANUP_ENABLED"],
+)
+
+script_executor = ScriptExecutor(
+    min_cert_expire=MIN_CERT_EXPIRE,
+    max_cert_expire=MAX_CERT_EXPIRE,
+    client_sh_cwd=runtime_settings["APP_BACKUP_AZ_INSTALL_DIR"],
+)
+
+
+def _get_nightly_idle_restart_settings():
+    return (
+        bool(_runtime_get("NIGHTLY_IDLE_RESTART_ENABLED", True)),
+        str(_runtime_get("NIGHTLY_IDLE_RESTART_CRON_EXPR", "0 4 * * *") or "0 4 * * *"),
+    )
+
+
+def _set_nightly_idle_restart_settings(enabled, cron_expr):
+    _runtime_set("NIGHTLY_IDLE_RESTART_ENABLED", bool(enabled))
+    _runtime_set("NIGHTLY_IDLE_RESTART_CRON_EXPR", (cron_expr or "0 4 * * *").strip())
+
+
+def _get_backup_settings():
+    return {
+        "enabled": bool(_runtime_get("APP_BACKUP_ENABLED", False)),
+        "interval_days": int(_runtime_get("APP_BACKUP_INTERVAL_DAYS", 1)),
+        "time_hhmm": str(_runtime_get("APP_BACKUP_TIME", "03:00") or "03:00"),
+        "components": str(_runtime_get("APP_BACKUP_COMPONENTS", "db,env,data") or "db,env,data"),
+        "tg_enabled": bool(_runtime_get("APP_BACKUP_TG_ENABLED", False)),
+        "tg_admin_ids": str(_runtime_get("APP_BACKUP_TG_ADMIN_IDS", "") or ""),
+        "az_enabled": bool(_runtime_get("APP_BACKUP_AZ_ENABLED", True)),
+    }
+
+
+def _set_backup_settings(
+    *,
+    enabled,
+    interval_days,
+    time_hhmm,
+    components,
+    tg_enabled,
+    tg_admin_ids,
+    az_enabled=True,
+):
+    _runtime_set("APP_BACKUP_ENABLED", bool(enabled))
+    _runtime_set("APP_BACKUP_INTERVAL_DAYS", int(interval_days))
+    _runtime_set("APP_BACKUP_TIME", (time_hhmm or "03:00").strip())
+    _runtime_set("APP_BACKUP_COMPONENTS", (components or "db,env,data").strip())
+    _runtime_set("APP_BACKUP_TG_ENABLED", bool(tg_enabled))
+    _runtime_set("APP_BACKUP_TG_ADMIN_IDS", (tg_admin_ids or "").strip())
+    _runtime_set("APP_BACKUP_AZ_ENABLED", bool(az_enabled))
+
+
+def _get_active_web_session_settings():
+    return (
+        int(_runtime_get("ACTIVE_WEB_SESSION_TTL_SECONDS", 180)),
+        int(_runtime_get("ACTIVE_WEB_SESSION_TOUCH_INTERVAL_SECONDS", 30)),
+    )
+
+
+def _set_active_web_session_settings(ttl_seconds, touch_interval_seconds):
+    _runtime_set("ACTIVE_WEB_SESSION_TTL_SECONDS", max(30, int(ttl_seconds)))
+    _runtime_set(
+        "ACTIVE_WEB_SESSION_TOUCH_INTERVAL_SECONDS",
+        max(1, int(touch_interval_seconds)),
+    )
+
+LOGS_DASHBOARD_CACHE_TTL_SECONDS = runtime_settings["LOGS_DASHBOARD_CACHE_TTL_SECONDS"]
+STATUS_LOG_FILES = runtime_settings["STATUS_LOG_FILES"]
+EVENT_LOG_FILES = runtime_settings["EVENT_LOG_FILES"]
+WIREGUARD_CONFIG_FILES = runtime_settings["WIREGUARD_CONFIG_FILES"]
+WIREGUARD_ACTIVE_HANDSHAKE_SECONDS = runtime_settings["WIREGUARD_ACTIVE_HANDSHAKE_SECONDS"]
+WIREGUARD_PEER_CACHE_SYNC_MIN_INTERVAL_SECONDS = runtime_settings[
+    "WIREGUARD_PEER_CACHE_SYNC_MIN_INTERVAL_SECONDS"
+]
+STATUS_LOG_CLEANUP_MARKER = runtime_settings["STATUS_LOG_CLEANUP_MARKER"]
+STATUS_LOG_CLEANUP_PERIODS = runtime_settings["STATUS_LOG_CLEANUP_PERIODS"]
+
+
+def _ensure_traffic_sync_cron():
+    return maintenance_scheduler_service.ensure_traffic_sync_cron()
+
+
+def _ensure_wg_policy_sync_cron():
+    return maintenance_scheduler_service.ensure_wg_policy_sync_cron()
+
+
+def _ensure_nightly_idle_restart_cron():
+    return maintenance_scheduler_service.ensure_nightly_idle_restart_cron()
+
+
+def _ensure_app_backup_cron():
+    return maintenance_scheduler_service.ensure_app_backup_cron()
+
+
+def _ensure_runtime_backup_cleanup_cron():
+    return maintenance_scheduler_service.ensure_runtime_backup_cleanup_cron()
+
+
+_services = build_services(
+    app=app,
+    db=db,
+    app_root=APP_ROOT,
+    logs_dir=LOGS_DIR,
+    status_log_cleanup_marker=STATUS_LOG_CLEANUP_MARKER,
+    status_log_cleanup_periods=STATUS_LOG_CLEANUP_PERIODS,
+    traffic_sync_cron_marker=TRAFFIC_SYNC_CRON_MARKER,
+    traffic_sync_cron_expr=TRAFFIC_SYNC_CRON_EXPR,
+    traffic_sync_enabled=TRAFFIC_SYNC_ENABLED,
+    wg_policy_sync_cron_marker=WG_POLICY_SYNC_CRON_MARKER,
+    wg_policy_sync_cron_expr=WG_POLICY_SYNC_CRON_EXPR,
+    wg_policy_sync_enabled=WG_POLICY_SYNC_ENABLED,
+    nightly_idle_restart_marker=NIGHTLY_IDLE_RESTART_MARKER,
+    app_backup_cron_marker=APP_BACKUP_CRON_MARKER,
+    runtime_backup_cleanup_marker=RUNTIME_BACKUP_CLEANUP_MARKER,
+    runtime_backup_cleanup_cron_expr=RUNTIME_BACKUP_CLEANUP_CRON_EXPR,
+    runtime_backup_root=RUNTIME_BACKUP_ROOT,
+    runtime_backup_retention_hours=RUNTIME_BACKUP_RETENTION_HOURS,
+    runtime_backup_cleanup_enabled=RUNTIME_BACKUP_CLEANUP_ENABLED,
+    backup_root=APP_BACKUP_ROOT,
+    backup_service_name=APP_BACKUP_SERVICE_NAME,
+    backup_retention_count=APP_BACKUP_RETENTION_COUNT,
+    openvpn_socket_dir=OPENVPN_SOCKET_DIR,
+    openvpn_socket_timeout=OPENVPN_SOCKET_TIMEOUT,
+    openvpn_socket_idle_timeout=OPENVPN_SOCKET_IDLE_TIMEOUT,
+    openvpn_log_tail_lines=OPENVPN_LOG_TAIL_LINES,
+    openvpn_event_max_response_bytes=OPENVPN_EVENT_MAX_RESPONSE_BYTES,
+    wireguard_config_files=WIREGUARD_CONFIG_FILES,
+    wireguard_active_handshake_seconds=WIREGUARD_ACTIVE_HANDSHAKE_SECONDS,
+    wireguard_peer_cache_sync_min_interval_seconds=WIREGUARD_PEER_CACHE_SYNC_MIN_INTERVAL_SECONDS,
+    status_log_files=STATUS_LOG_FILES,
+    traffic_db_stale_seconds=TRAFFIC_DB_STALE_SECONDS,
+    openvpn_peer_info_cache_ttl_seconds=OPENVPN_PEER_INFO_CACHE_TTL_SECONDS,
+    openvpn_peer_info_history_retention_seconds=OPENVPN_PEER_INFO_HISTORY_RETENTION_SECONDS,
+    logs_dashboard_cache_ttl_seconds=LOGS_DASHBOARD_CACHE_TTL_SECONDS,
+    active_web_session_model=ActiveWebSession,
+    user_traffic_sample_model=UserTrafficSample,
+    traffic_session_state_model=TrafficSessionState,
+    user_traffic_stat_model=UserTrafficStat,
+    user_traffic_stat_protocol_model=UserTrafficStatProtocol,
+    openvpn_peer_info_cache_model=OpenVPNPeerInfoCache,
+    openvpn_peer_info_history_model=OpenVPNPeerInfoHistory,
+    wireguard_peer_cache_model=WireGuardPeerCache,
+    logs_dashboard_cache_model=LogsDashboardCache,
+    background_task_model=BackgroundTask,
+    integrity_error_cls=IntegrityError,
+    is_valid_cron_expression=_is_valid_cron_expression,
+    get_nightly_idle_restart_settings=lambda: _get_nightly_idle_restart_settings(),
+    get_backup_settings=lambda: _get_backup_settings(),
+    get_active_web_session_settings=lambda: _get_active_web_session_settings(),
+    collect_config_protocols_by_client=lambda: _collect_config_protocols_by_client(),
+    build_session_key=lambda profile, client: _build_session_key(profile, client),
+    collect_status_rows_for_snapshot=lambda: _collect_status_rows_for_snapshot(),
+    human_bytes=lambda value: _human_bytes(value),
+    extract_ip_from_openvpn_address=lambda value: _extract_ip_from_openvpn_address(value),
+    profile_meta=lambda profile_key: _profile_meta(profile_key),
+    read_status_source=lambda profile_key, fallback_path: _read_status_source(profile_key, fallback_path),
+    read_event_source=lambda profile_key, fallback_path: _read_event_source(profile_key, fallback_path),
+    normalize_openvpn_endpoint=lambda endpoint: _normalize_openvpn_endpoint(endpoint),
+    normalize_traffic_protocol_type=lambda protocol_type, fallback="openvpn": _normalize_traffic_protocol_type(protocol_type, fallback=fallback),
+    normalize_traffic_client_identity=lambda name: client_protocol_catalog_service.normalize_traffic_client_identity(name),
+    rebuild_user_traffic_stats_from_samples=lambda seed_users=None, now=None: _rebuild_user_traffic_stats_from_samples(seed_users=seed_users, now=now),
+    human_seconds=lambda value: _human_seconds(value),
+    format_dt=lambda dt_obj: _format_dt(dt_obj),
+    collect_logs_dashboard_data=lambda: _collect_logs_dashboard_data(),
+    enqueue_background_task=lambda task_type, target_func, created_by_username=None, queued_message=None: _enqueue_background_task(
+        task_type,
+        target_func,
+        created_by_username=created_by_username,
+        queued_message=queued_message,
+    ),
+)
+
+maintenance_scheduler_service = _services["maintenance_scheduler_service"]
+backup_manager_service = _services["backup_manager_service"]
+active_web_session_service = _services["active_web_session_service"]
+traffic_maintenance_service = _services["traffic_maintenance_service"]
+openvpn_socket_reader_service = _services["openvpn_socket_reader_service"]
+network_status_collector_service = _services["network_status_collector_service"]
+traffic_persistence_service = _services["traffic_persistence_service"]
+peer_info_cache_service = _services["peer_info_cache_service"]
+logs_dashboard_cache_service = _services["logs_dashboard_cache_service"]
+
+
+def _touch_active_web_session(username, force=False):
+    if not bool(_runtime_get("ACTIVE_WEB_SESSION_TRACKING_ENABLED", True)):
+        return
+    active_web_session_service.touch_active_web_session(
+        username,
+        session_obj=session,
+        request_obj=request,
+        db_session=db.session,
+        force=force,
+    )
+
+
+def _remove_active_web_session():
+    active_web_session_service.remove_active_web_session(
+        session_obj=session,
+        db_session=db.session,
+    )
+
+
+def _set_status_cleanup_schedule(period):
+    return maintenance_scheduler_service.set_status_cleanup_schedule(period)
+
+
+def _cleanup_status_logs_now():
+    return maintenance_scheduler_service.cleanup_status_logs_now()
+
+
+if not _SKIP_APP_BOOTSTRAP:
+    try:
+        _sync_ok, _sync_msg = _ensure_traffic_sync_cron()
+        if not _sync_ok:
+            app.logger.warning(_sync_msg)
+    except (RuntimeError, OSError, ValueError) as e:
+        app.logger.warning(f"Не удалось инициализировать cron sync трафика: {e}")
+
+    try:
+        _wg_policy_ok, _wg_policy_msg = _ensure_wg_policy_sync_cron()
+        if not _wg_policy_ok:
+            app.logger.warning(_wg_policy_msg)
+    except (RuntimeError, OSError, ValueError) as e:
+        app.logger.warning(f"Не удалось инициализировать cron sync WG/AWG политик: {e}")
+
+    try:
+        _idle_restart_ok, _idle_restart_msg = _ensure_nightly_idle_restart_cron()
+        if not _idle_restart_ok:
+            app.logger.warning(_idle_restart_msg)
+    except (RuntimeError, OSError, ValueError) as e:
+        app.logger.warning(f"Не удалось инициализировать cron ночного рестарта: {e}")
+
+    try:
+        _app_backup_ok, _app_backup_msg = _ensure_app_backup_cron()
+        if not _app_backup_ok:
+            app.logger.warning(_app_backup_msg)
+    except (RuntimeError, OSError, ValueError) as e:
+        app.logger.warning(f"Не удалось инициализировать cron авто-бэкапов: {e}")
+
+    try:
+        _backup_cleanup_ok, _backup_cleanup_msg = _ensure_runtime_backup_cleanup_cron()
+        if not _backup_cleanup_ok:
+            app.logger.warning(_backup_cleanup_msg)
+    except (RuntimeError, OSError, ValueError) as e:
+        app.logger.warning(f"Не удалось инициализировать cron очистки runtime_backups: {e}")
+
+def _normalize_traffic_protocol_scope(protocol_scope):
+    return traffic_maintenance_service.normalize_traffic_protocol_scope(protocol_scope)
+
+
+def _normalize_traffic_protocol_type(protocol_type, fallback="openvpn"):
+    return traffic_maintenance_service.normalize_traffic_protocol_type(protocol_type, fallback=fallback)
+
+
+def _rebuild_user_traffic_stats_from_samples(seed_users=None, now=None):
+    return traffic_maintenance_service.rebuild_user_traffic_stats_from_samples(
+        seed_users=seed_users,
+        now=now,
+    )
+
+
+def _reset_persisted_traffic_data(protocol_scope="all"):
+    return traffic_maintenance_service.reset_persisted_traffic_data(protocol_scope=protocol_scope)
+
+
+def _openvpn_socket_path(profile_key):
+    return openvpn_socket_reader_service.openvpn_socket_path(profile_key)
+
+
+def _read_status_source(profile_key, fallback_path):
+    return openvpn_socket_reader_service.read_status_source(profile_key, fallback_path)
+
+
+def _read_event_source(profile_key, fallback_path):
+    return openvpn_socket_reader_service.read_event_source(profile_key, fallback_path)
+
+
+def _persist_peer_info_cache(event_rows):
+    return peer_info_cache_service.persist_peer_info_cache(event_rows)
+
+
+def _load_peer_info_cache_map(include_stale=False):
+    return peer_info_cache_service.load_peer_info_cache_map(include_stale=include_stale)
+
+
+def _load_peer_info_history_map(include_stale=False):
+    return peer_info_cache_service.load_peer_info_history_map(include_stale=include_stale)
+
+
+def _human_bytes(value):
+    size = float(value or 0)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    precision = 0 if idx == 0 else (2 if size < 10 else 1)
+    return f"{size:.{precision}f} {units[idx]}"
+
+
+def _human_seconds(seconds_value):
+    value = int(seconds_value or 0)
+    if value < 60:
+        return f"{value} сек"
+    if value < 3600:
+        return f"{value // 60} мин"
+    if value < 86400:
+        return f"{value // 3600} ч"
+    return f"{value // 86400} д"
+
+
+def _human_device_type(platform):
+    return peer_info_cache_service.human_device_type(platform)
+
+
+def _normalize_openvpn_endpoint(endpoint):
+    """Remove OpenVPN transport prefixes from endpoint token."""
+    if not endpoint:
+        return endpoint
+    return re.sub(r"^(?:tcp|udp)\d(?:-server)?:", "", endpoint.strip(), flags=re.IGNORECASE)
+
+
+def _extract_ip_from_openvpn_address(address):
+    """Extract host/IP from OpenVPN real address token."""
+    normalized = _normalize_openvpn_endpoint(address)
+    if not normalized:
+        return normalized
+
+    if normalized.startswith("["):
+        m_v6 = re.match(r"^\[([^\]]+)\](?::\d+)?$", normalized)
+        if m_v6:
+            return m_v6.group(1)
+
+    if ":" in normalized:
+        host_part, maybe_port = normalized.rsplit(":", 1)
+        if maybe_port.isdigit():
+            return host_part
+
+    return normalized
+
+
+def _profile_meta(profile_key):
+    is_antizapret = profile_key.startswith("antizapret")
+    is_tcp = "-tcp" in profile_key
+    is_wireguard = profile_key.endswith("-wg")
+    return {
+        "network": "Antizapret" if is_antizapret else "VPN",
+        "transport": "TCP" if is_tcp else "UDP",
+        "protocol": "WireGuard" if is_wireguard else "OpenVPN",
+    }
+
+
+def _format_dt(dt_obj):
+    if not dt_obj:
+        return "-"
+    try:
+        return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+    except (AttributeError, TypeError, ValueError):
+        return "-"
+
+
+def _extract_client_name_from_config_file(file_path):
+    return client_protocol_catalog_service.extract_client_name_from_config_file(file_path)
+
+
+def _collect_existing_config_client_names():
+    return client_protocol_catalog_service.collect_existing_config_client_names()
+
+
+def _collect_config_protocols_by_client():
+    return client_protocol_catalog_service.collect_config_protocols_by_client()
+
+
+def _collect_sample_protocols_by_client():
+    return client_protocol_catalog_service.collect_sample_protocols_by_client()
+
+
+def _split_persisted_traffic_rows_by_config(persisted_rows):
+    return client_protocol_catalog_service.split_persisted_traffic_rows_by_config(persisted_rows)
+
+
+def _build_session_key(profile, client):
+    return traffic_persistence_service.build_session_key(profile, client)
+
+
+def _is_retryable_snapshot_integrity_error(exc):
+    return traffic_persistence_service.is_retryable_snapshot_integrity_error(exc)
+
+
+def _persist_traffic_snapshot(status_rows, _retry_on_integrity=True):
+    return traffic_persistence_service.persist_traffic_snapshot(status_rows, retry_on_integrity=_retry_on_integrity)
+
+
+def _protocol_label_from_type(protocol_type):
+    return traffic_persistence_service.protocol_label_from_type(protocol_type)
+
+
+def _ensure_protocol_traffic_stats_backfilled(now=None):
+    return traffic_persistence_service.ensure_protocol_traffic_stats_backfilled(now=now)
+
+
+def _collect_persisted_traffic_data(active_names=None, active_protocol_identities=None):
+    return traffic_persistence_service.collect_persisted_traffic_data(active_names=active_names, active_protocol_identities=active_protocol_identities)
+
+
+def _delete_client_traffic_stats(common_name):
+    return traffic_persistence_service.delete_client_traffic_stats(common_name)
+
+
+def _normalize_traffic_client_identity(raw_name):
+    return client_protocol_catalog_service.normalize_traffic_client_identity(raw_name)
+
+
+def _queue_logs_dashboard_refresh_after_traffic_mutation(created_by_username=None):
+    logs_dashboard_cache_service.queue_logs_dashboard_refresh_if_needed(
+        created_by_username=created_by_username
+    )
+
+def _normalize_wireguard_allowed_ip(token):
+    return network_status_collector_service.normalize_wireguard_allowed_ip(token)
+
+
+def _split_wireguard_allowed_ips(value):
+    return network_status_collector_service.split_wireguard_allowed_ips(value)
+
+
+def _extract_ip_from_wireguard_endpoint(endpoint):
+    return network_status_collector_service.extract_ip_from_wireguard_endpoint(endpoint)
+
+
+def _parse_wireguard_config_peer_rows(config_path, interface_name):
+    return network_status_collector_service.parse_wireguard_config_peer_rows(config_path, interface_name)
+
+
+def _sync_wireguard_peer_cache_from_configs(force=False):
+    return network_status_collector_service.sync_wireguard_peer_cache_from_configs(force=force)
+
+
+def _load_wireguard_peer_cache_maps():
+    return network_status_collector_service.load_wireguard_peer_cache_maps()
+
+
+wg_awg_runtime_enforcer = WgAwgRuntimeEnforcer(
+    wireguard_peer_cache_model=WireGuardPeerCache,
+    wireguard_config_files=WIREGUARD_CONFIG_FILES,
+    command_timeout_seconds=4,
+)
+
+
+def _get_client_consumed_traffic_bytes(client_name, *, period_days=None):
+    from core.services.traffic_limit import get_client_consumed_traffic_bytes
+
+    return get_client_consumed_traffic_bytes(
+        db=db,
+        user_traffic_stat_protocol_model=UserTrafficStatProtocol,
+        user_traffic_sample_model=UserTrafficSample,
+        client_name=client_name,
+        normalize_identity=_normalize_traffic_client_identity,
+        period_days=period_days,
+    )
+
+
+wg_access_policy_service = WgAccessPolicyService(
+    db=db,
+    policy_model=WgAccessPolicy,
+    runtime_enforcer=wg_awg_runtime_enforcer,
+    get_consumed_traffic_bytes=_get_client_consumed_traffic_bytes,
+)
+
+openvpn_access_policy_service = OpenVpnAccessPolicyService(
+    db=db,
+    policy_model=OpenVpnAccessPolicy,
+    read_banned_clients=_read_banned_clients,
+    write_banned_clients=_write_banned_clients,
+    ensure_client_connect_ban_check_block=_ensure_client_connect_ban_check_block,
+    get_consumed_traffic_bytes=_get_client_consumed_traffic_bytes,
+)
+
+
+def _reconcile_traffic_limit_policies():
+    wg_clients = [
+        row.client_name
+        for row in WgAccessPolicy.query.filter(WgAccessPolicy.traffic_limit_bytes.isnot(None)).all()
+    ]
+    ovpn_clients = [
+        row.client_name
+        for row in OpenVpnAccessPolicy.query.filter(OpenVpnAccessPolicy.traffic_limit_bytes.isnot(None)).all()
+    ]
+    for client_name in wg_clients:
+        wg_access_policy_service.reconcile_client_policy(client_name, apply_runtime=True)
+    for client_name in ovpn_clients:
+        openvpn_access_policy_service.reconcile_client_policy(client_name)
+    if traffic_limit_notify_service is not None:
+        traffic_limit_notify_service.process_clients(protocol_scope="wg", client_names=wg_clients)
+        traffic_limit_notify_service.process_clients(protocol_scope="openvpn", client_names=ovpn_clients)
+
+
+traffic_persistence_service.on_after_persist = _reconcile_traffic_limit_policies
+
+
+def _wg_build_status_map(client_names):
+    return wg_access_policy_service.build_status_map(client_names)
+
+
+def _openvpn_build_status_map(client_names):
+    return openvpn_access_policy_service.build_status_map(client_names)
+
+
+def _openvpn_set_temp_block_days(client_name, days, *, actor_username=None):
+    return openvpn_access_policy_service.set_temp_block_days(
+        client_name,
+        days,
+        actor_username=actor_username,
+    )
+
+
+def _openvpn_set_permanent_block(client_name, *, actor_username=None):
+    return openvpn_access_policy_service.set_permanent_block(
+        client_name,
+        actor_username=actor_username,
+    )
+
+
+def _openvpn_clear_block(client_name, *, actor_username=None):
+    return openvpn_access_policy_service.clear_block(
+        client_name,
+        actor_username=actor_username,
+    )
+
+
+def _openvpn_reconcile_client_policy(client_name):
+    return openvpn_access_policy_service.reconcile_client_policy(client_name)
+
+
+def _openvpn_reconcile_all_policies():
+    return openvpn_access_policy_service.reconcile_all()
+
+
+def _wg_set_expiry_days(client_name, days, *, actor_username=None, extend=False):
+    return wg_access_policy_service.set_expiry_days(
+        client_name,
+        days,
+        actor_username=actor_username,
+        extend=extend,
+    )
+
+
+def _wg_set_temp_block_days(client_name, days, *, actor_username=None):
+    return wg_access_policy_service.set_temp_block_days(
+        client_name,
+        days,
+        actor_username=actor_username,
+    )
+
+
+def _wg_set_permanent_block(client_name, *, actor_username=None):
+    return wg_access_policy_service.set_permanent_block(
+        client_name,
+        actor_username=actor_username,
+    )
+
+
+def _wg_clear_temp_block(client_name, *, actor_username=None):
+    return wg_access_policy_service.clear_block(
+        client_name,
+        actor_username=actor_username,
+    )
+
+
+def _wg_set_traffic_limit_bytes(client_name, limit_bytes, *, period_days=None, actor_username=None):
+    row = wg_access_policy_service.set_traffic_limit_bytes(
+        client_name,
+        limit_bytes,
+        period_days=period_days,
+        actor_username=actor_username,
+    )
+    if traffic_limit_notify_service is not None:
+        traffic_limit_notify_service.process_client(protocol_scope="wg", client_name=client_name)
+    return row
+
+
+def _wg_clear_traffic_limit(client_name, *, actor_username=None):
+    row = wg_access_policy_service.clear_traffic_limit(
+        client_name,
+        actor_username=actor_username,
+    )
+    if traffic_limit_notify_service is not None:
+        traffic_limit_notify_service.process_client(protocol_scope="wg", client_name=client_name)
+    return row
+
+
+def _openvpn_set_traffic_limit_bytes(client_name, limit_bytes, *, period_days=None, actor_username=None):
+    row = openvpn_access_policy_service.set_traffic_limit_bytes(
+        client_name,
+        limit_bytes,
+        period_days=period_days,
+        actor_username=actor_username,
+    )
+    if traffic_limit_notify_service is not None:
+        traffic_limit_notify_service.process_client(protocol_scope="openvpn", client_name=client_name)
+    return row
+
+
+def _openvpn_clear_traffic_limit(client_name, *, actor_username=None):
+    row = openvpn_access_policy_service.clear_traffic_limit(
+        client_name,
+        actor_username=actor_username,
+    )
+    if traffic_limit_notify_service is not None:
+        traffic_limit_notify_service.process_client(protocol_scope="openvpn", client_name=client_name)
+    return row
+
+
+def _wg_reconcile_client_policy(client_name, apply_runtime=True):
+    return wg_access_policy_service.reconcile_client_policy(
+        client_name,
+        apply_runtime=apply_runtime,
+    )
+
+
+def _wg_reconcile_all_policies(apply_runtime=True):
+    return wg_access_policy_service.reconcile_all(apply_runtime=apply_runtime)
+
+
+if not _SKIP_APP_BOOTSTRAP:
+    try:
+        with app.app_context():
+            _openvpn_reconcile_all_policies()
+    except Exception:
+        try:
+            with app.app_context():
+                db.session.rollback()
+        except Exception as rollback_exc:
+            app.logger.warning("Откат сессии после ошибки OpenVPN-политик не удался: %s", rollback_exc)
+        app.logger.exception("Не удалось применить OpenVPN политики при запуске")
+
+    try:
+        with app.app_context():
+            _wg_reconcile_all_policies(apply_runtime=True)
+    except Exception:
+        try:
+            with app.app_context():
+                db.session.rollback()
+        except Exception as rollback_exc:
+            app.logger.warning("Откат сессии после ошибки WG/AWG-политик не удался: %s", rollback_exc)
+        app.logger.exception("Не удалось применить WG/AWG политики при запуске")
+
+
+def _is_wireguard_peer_active(latest_handshake_ts):
+    return network_status_collector_service.is_wireguard_peer_active(latest_handshake_ts)
+
+
+def _collect_wireguard_status_rows():
+    return network_status_collector_service.collect_wireguard_status_rows()
+
+
+def _collect_status_rows_for_snapshot():
+    return network_status_collector_service.collect_status_rows_for_snapshot()
+
+
+def _parse_status_log(profile_key, filename):
+    return network_status_collector_service.parse_status_log(profile_key, filename)
+
+
+def _parse_event_log(profile_key, filename):
+    return network_status_collector_service.parse_event_log(profile_key, filename)
+
+def _collect_logs_dashboard_data():
+    return collect_logs_dashboard_data_service(
+        app=app,
+        db=db,
+        _collect_status_rows_for_snapshot=_collect_status_rows_for_snapshot,
+        _persist_traffic_snapshot=_persist_traffic_snapshot,
+        _parse_event_log=_parse_event_log,
+        EVENT_LOG_FILES=EVENT_LOG_FILES,
+        _persist_peer_info_cache=_persist_peer_info_cache,
+        _load_peer_info_history_map=_load_peer_info_history_map,
+        _load_peer_info_cache_map=_load_peer_info_cache_map,
+        _collect_persisted_traffic_data=_collect_persisted_traffic_data,
+        _split_persisted_traffic_rows_by_config=_split_persisted_traffic_rows_by_config,
+        _collect_config_protocols_by_client=_collect_config_protocols_by_client,
+        _collect_sample_protocols_by_client=_collect_sample_protocols_by_client,
+        _normalize_traffic_protocol_type=_normalize_traffic_protocol_type,
+        _protocol_label_from_type=_protocol_label_from_type,
+        _openvpn_socket_path=_openvpn_socket_path,
+        _human_bytes=_human_bytes,
+        _human_device_type=_human_device_type,
+        _normalize_openvpn_endpoint=_normalize_openvpn_endpoint,
+    )
+
+
+admin_notify_service = AdminNotifyService(
+    user_model=User,
+    get_env_value=_get_env_value,
+    logger=app.logger,
+)
+
+traffic_limit_notify_service = None
+try:
+    from core.services.traffic_limit_notify import TrafficLimitNotifyService
+
+    traffic_limit_notify_service = TrafficLimitNotifyService(
+        admin_notify_service=admin_notify_service,
+        wg_access_policy_service=wg_access_policy_service,
+        openvpn_access_policy_service=openvpn_access_policy_service,
+        config_paths=CONFIG_PATHS,
+        extract_client_name_from_config_file=_extract_client_name_from_config_file,
+        logger=app.logger,
+    )
+except Exception as _traffic_limit_notify_exc:
+    app.logger.warning(
+        "Не удалось инициализировать уведомления лимита трафика: %s",
+        _traffic_limit_notify_exc,
+    )
+
+
+def _send_tg_admin_notification(event_type, *, actor_username=None,
+                                 target_name=None, target_type=None,
+                                 remote_addr=None, details=None,
+                                 subject_name=None, client_timezone=None):
+    admin_notify_service.send(
+        event_type,
+        actor_username=actor_username,
+        target_name=target_name,
+        target_type=target_type,
+        remote_addr=remote_addr,
+        details=details,
+        subject_name=subject_name,
+        client_timezone=client_timezone,
+    )
+
+
+register_all_routes(app, sock, locals())
+
+from core.services.feature_guards import register_feature_guards
+
+register_feature_guards(app, get_env_value=_get_env_value)
+
+if bool(_runtime_get("MONITOR_ENABLED", True)):
+    admin_notify_service.start_monitor()
+else:
+    app.logger.info("Мониторинг нагрузки CPU/RAM отключён (MONITOR_ENABLED=false)")

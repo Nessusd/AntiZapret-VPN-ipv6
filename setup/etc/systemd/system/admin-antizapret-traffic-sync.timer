@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AdminAntizapret traffic sync every 90 seconds
+
+[Timer]
+OnBootSec=45sec
+OnUnitActiveSec=90sec
+AccuracySec=1s
+Unit=admin-antizapret-traffic-sync.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

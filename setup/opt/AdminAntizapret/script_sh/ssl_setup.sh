@@ -1,0 +1,670 @@
+#!/bin/bash
+
+# Функция выбора порта
+get_port() {
+	DEF_CUR_PORT=$([[ -f "$INSTALL_DIR/.env" ]] && grep -oP 'APP_PORT=\K\d+' "$INSTALL_DIR/.env") || DEF_CUR_PORT="$DEFAULT_PORT"
+	while true; do
+		read -r -p "Введите порт для сервиса 1-65535 [$DEF_CUR_PORT]: " APP_PORT
+		APP_PORT=${APP_PORT:-"$DEF_CUR_PORT"}
+		if ! [[ "$APP_PORT" =~ ^[0-9]+$ ]] || ((APP_PORT < 1 || APP_PORT > 65535)); then
+			echo "${RED}Некорректный номер порта!${NC}"
+			continue
+		fi
+		if [[ $(grep -oP 'APP_PORT=\K\d+' "$INSTALL_DIR/.env" 2>/dev/null) == "$APP_PORT" ]]; then
+
+			break
+		fi
+		if [[ "$APP_PORT" -eq 80 || "$APP_PORT" -eq 443 ]]; then
+			if ! check_openvpn_tcp_setting; then
+				continue
+			fi
+		fi
+		SERVICE_BUSY=$(ss -tlpn | grep ":$APP_PORT" | awk -F'[(),"]' '{print $4; exit}')
+		RULES_BUSY=$(iptables-save | grep "PREROUTING.*-p tcp.*--dport $APP_PORT" | grep "$(ip route | grep default | awk '{print $5}')")
+		if [ -n "$SERVICE_BUSY" ] || [ -n "$RULES_BUSY" ]; then
+			[ -n "$SERVICE_BUSY" ] && echo "${RED}Порт ${YELLOW}$APP_PORT${RED} занят процессом ${YELLOW}$SERVICE_BUSY${NC}"
+			[ -n "$RULES_BUSY" ] && {
+				echo "${RED}В таблице маршрутизации обнаружено перенаправление порта ${YELLOW}$APP_PORT${RED}, приложение не будет работать корректно${NC}"
+				echo "$RULES_BUSY"
+			}
+			continue
+		fi
+		break
+	done
+}
+
+set_env_value() {
+	local key="$1"
+	local value="$2"
+	local env_file="$INSTALL_DIR/.env"
+	local escaped_value
+
+	mkdir -p "$INSTALL_DIR"
+	[ -f "$env_file" ] || touch "$env_file"
+
+	escaped_value=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
+	if grep -q "^${key}=" "$env_file"; then
+		sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$env_file"
+	else
+		echo "${key}=${value}" >>"$env_file"
+	fi
+}
+
+set_secret_key_if_missing() {
+	local env_file="$INSTALL_DIR/.env"
+
+	mkdir -p "$INSTALL_DIR"
+	[ -f "$env_file" ] || touch "$env_file"
+
+	if grep -q '^SECRET_KEY=' "$env_file"; then
+		return 0
+	fi
+
+	if [ -z "$SECRET_KEY" ]; then
+		if declare -F generate_secret_key >/dev/null 2>&1; then
+			SECRET_KEY=$(generate_secret_key)
+		fi
+	fi
+	if [ -z "$SECRET_KEY" ]; then
+		echo "${RED}Не удалось сгенерировать SECRET_KEY.${NC}" >&2
+		return 1
+	fi
+	set_env_value "SECRET_KEY" "$SECRET_KEY"
+}
+
+unset_env_value() {
+	local key="$1"
+	local env_file="$INSTALL_DIR/.env"
+	[ -f "$env_file" ] || return 0
+	sed -i "/^${key}=/d" "$env_file"
+}
+
+ensure_certbot_available() {
+	if command -v certbot >/dev/null 2>&1; then
+		return 0
+	fi
+
+	# Пытаемся использовать snap, если он доступен.
+	if command -v snap >/dev/null 2>&1; then
+		snap install core >/dev/null 2>&1 || snap refresh core >/dev/null 2>&1 || true
+		snap install --classic certbot >/dev/null 2>&1 || snap refresh certbot >/dev/null 2>&1 || true
+		ln -sf /snap/bin/certbot /usr/bin/certbot >/dev/null 2>&1 || true
+	fi
+
+	# Fallback для Debian/Ubuntu, когда snap недоступен или не сработал.
+	if ! command -v certbot >/dev/null 2>&1; then
+		apt-get install -y -qq certbot --no-install-recommends >/dev/null 2>&1 || return 1
+	fi
+
+	command -v certbot >/dev/null 2>&1
+}
+
+choose_installation_type() {
+	while true; do
+		echo "${YELLOW}Выберите способ установки:${NC}"
+		echo "1) HTTPS (Защищенное соединение)"
+		echo "2) HTTP (Не защищенное соединение)"
+		read -r -p "Ваш выбор [1-2]: " ssl_main_choice
+
+		case $ssl_main_choice in
+		1)
+			echo "${YELLOW}Выберите тип HTTPS соединения:${NC}"
+			echo "  1) Использовать собственный домен и получить сертификаты Let's Encrypt"
+			echo "  2) Использовать Nginx как reverse proxy с сертификатами Let's Encrypt"
+			echo "  3) Самоподписанный сертификат"
+			echo "  4) Использовать собственный домен и собственные сертификаты"
+			read -r -p "Ваш выбор [1-4]: " ssl_sub_choice
+
+			case $ssl_sub_choice in
+			1 | 2 | 3 | 4)
+				# Базовые настройки для HTTPS
+				get_port
+				set_secret_key_if_missing || return 1
+				set_env_value "APP_PORT" "$APP_PORT"
+
+				case $ssl_sub_choice in
+				1) setup_letsencrypt || return 1 ;;
+				2) setup_nginx_letsencrypt || return 1 ;;
+				3) setup_selfsigned || return 1 ;;
+				4) setup_custom_certs || return 1 ;;
+				esac
+				return 0
+				;;
+			*)
+				echo "${RED}Неверный выбор!${NC}"
+				continue
+				;;
+			esac
+			;;
+		2)
+			# Настройки для HTTP
+			get_port
+			configure_http || return 1
+			return 0
+			;;
+		*)
+			echo "${RED}Неверный выбор!${NC}"
+			;;
+		esac
+	done
+}
+
+check_openvpn_tcp_setting() {
+	if [ -f "/root/antizapret/setup" ]; then
+		OPENVPN_SETTING=$(grep '^OPENVPN_80_443_TCP=' /root/antizapret/setup | cut -d'=' -f2)
+		if [ "$OPENVPN_SETTING" = "y" ]; then
+			echo "${RED}Обнаружено, что порты 80 и 443 используются в AntiZapret-VPN как резервные для TCP OpenVPN.${NC}"
+			echo "${YELLOW}Такое резервирование гарантирует работоспособность OPENVPN даже в ситуации, если провайдер использует блокирующий фаервол.${NC}"
+			echo "${YELLOW}Использование портов 80 и 443 для сервиса AdminAntizapret удобно (в случае HTTPS например можно подключаться к WEB оснастке по${NC}"
+			echo "${YELLOW}адресу https://example.com вместо https://example.com:443), но это не является безопасным вариантом.${NC}"
+			echo "${YELLOW}Учтите, что подавляющая часть сетевых атак приходятся именно на WEB сервисы, размещенные на 80 и 443 портах.${NC}"
+			echo "Вы можете отключить это резервирование для OpenVPN, чтобы использовать стандартные WEB порты для AdminAntizapret(y) или оставить как есть, выбрав другой порт(n)"
+			read -r -p "Отключить резервирование портов в OpenVPN? (y/n): " change_choice
+			if [[ "$change_choice" =~ ^[Yy]$ ]]; then
+				sed -i 's/^OPENVPN_80_443_TCP=y/OPENVPN_80_443_TCP=n/' /root/antizapret/setup
+				systemctl restart antizapret.service
+				echo "${GREEN}Резервирование портов в OpenVPN отключено и сервис перезапущен!${NC}"
+				return 0
+			else
+				return 1
+			fi
+		else
+			return 0
+		fi
+	fi
+	return 0
+}
+
+setup_letsencrypt() {
+	log "Настройка Let's Encrypt"
+	echo "${YELLOW}Настройка Let's Encrypt...${NC}"
+
+	while true; do
+		read -r -p "Введите доменное имя (например, example.com): " DOMAIN
+		if [[ $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+			# Проверка существующих сертификатов для введенного домена
+			if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+				echo "${YELLOW}Для домена $DOMAIN уже существуют сертификаты Let's Encrypt.${NC}"
+				read -r -p "Использовать существующие сертификаты? (y/n): " use_existing
+				if [[ "$use_existing" =~ ^[Yy]$ ]]; then
+					set_env_value "USE_HTTPS" "true"
+					set_env_value "SESSION_COOKIE_SECURE" "true"
+					set_env_value "WTF_CSRF_SSL_STRICT" "true"
+					set_env_value "SSL_CERT" "/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+					set_env_value "SSL_KEY" "/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+					set_env_value "DOMAIN" "$DOMAIN"
+					unset_env_value "BIND"
+					echo "${GREEN}Используются существующие сертификаты Let's Encrypt для домена $DOMAIN!${NC}"
+					return 0
+				else
+					echo "${YELLOW}Продолжаем процесс получения новых сертификатов...${NC}"
+				fi
+			fi
+			break
+		else
+			echo "${RED}Неверный формат домена!${NC}"
+		fi
+	done
+
+	# Тут изменил блок для email с возможностью пропуска
+	read -r -p "Введите email для уведомлений и рассылки от Let's Encrypt (нажмите ENTER, если эта функция не нужна): " EMAIL
+	while [[ -n "$EMAIL" && ! "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; do
+		echo "${RED}Неверный формат email!${NC}"
+		read -r -p "Попробуйте еще раз или нажмите ENTER для отмены: " EMAIL
+	done
+
+	if ! dig +short "$DOMAIN" | grep -q '[0-9]'; then
+		echo "${YELLOW}DNS запись для $DOMAIN не найдена или неверна!${NC}"
+		read -r -p "Продолжить установку? (y/n): " choice
+		[[ "$choice" =~ ^[Yy]$ ]] || return 1
+	fi
+
+	# Функция восстановления правил
+	restore_rules() {
+		if [ -z "$PORT80_RULES" ]; then
+			echo "${YELLOW}Восстановление правил с портом 80 не требуется${NC}"
+		else
+			echo "$SAVE_RULES" | iptables-restore
+			if iptables-save | grep "PREROUTING.*-p tcp.*--dport 80" | grep "$(ip route | grep default | awk '{print $5}')" >/dev/null; then
+				echo "${GREEN}Правила с портом 80 успешно восстановлены${NC}"
+			else
+				check_error "Ошибка при восстановлении правил с портом 80"
+			fi
+		fi
+	}
+
+	# Функция восстановления служб (если они конечно были)
+	restore_services() {
+		if [ -n "$SERVICE_BUSY" ] && systemctl is-enabled "$SERVICE_BUSY" &>/dev/null; then
+			if ! systemctl is-active "$SERVICE_BUSY" &>/dev/null; then
+				printf "%s" "${YELLOW}Попытка автоматического возобновления работы службы ${NC}$SERVICE_BUSY${YELLOW}...${NC}"
+				if systemctl start "$SERVICE_BUSY" &>/dev/null; then
+					echo "${GREEN}УСПЕХ${NC}"
+				else
+					echo "${RED}НЕУДАЧА${NC}"
+				fi
+			fi
+		fi
+		if systemctl is-enabled "$SERVICE_NAME" &>/dev/null && ! systemctl is-active "$SERVICE_NAME" &>/dev/null; then
+			systemctl start "$SERVICE_NAME"
+		fi
+	}
+
+	# Стоп службы (если они конечно есть). Для первой установки можно было и не делать остановку AdminAntizapret, добавил чтобы этим же скриптом переустанавливать можно было
+	SERVICE_BUSY=$(ss -tlpn | grep ":$APP_PORT" | awk -F'[(),"]' '{print $4; exit}')
+	if [ -n "$SERVICE_BUSY" ]; then
+		printf "%s" "${YELLOW}Порт 80 занят службой ${NC}$SERVICE_BUSY${YELLOW}, попытка автоматического освобождения...${NC}"
+		if systemctl is-enabled "$SERVICE_BUSY" &>/dev/null && systemctl is-active "$SERVICE_BUSY" &>/dev/null && systemctl stop "$SERVICE_BUSY" &>/dev/null; then
+			echo "${GREEN}УСПЕХ${NC}"
+		else
+			echo "${RED}НЕУДАЧА${NC}"
+			check_error "Попробуйте освободить порт вручную или выберите другой"
+		fi
+	fi
+	if systemctl is-enabled "$SERVICE_NAME" &>/dev/null && systemctl is-active "$SERVICE_NAME" &>/dev/null; then
+		systemctl stop "$SERVICE_NAME"
+	fi
+
+	# Временно удаляю перенаправление для порта 80
+	SAVE_RULES=$(iptables-save)
+	PORT80_RULES=$(iptables-save | grep "PREROUTING.*-p tcp.*--dport 80" | grep "$(ip route | grep default | awk '{print $5}')")
+	if [ -n "$PORT80_RULES" ]; then
+		while read -r line; do
+			read -r -a rule_parts <<<"${line#-A }"
+			iptables -t nat -D "${rule_parts[@]}"
+		done <<<"$PORT80_RULES"
+		if ! iptables-save | grep "PREROUTING.*-p tcp.*--dport 80" | grep "$(ip route | grep default | awk '{print $5}')" >/dev/null; then
+			echo "${GREEN}Все правила с портом 80 временно удалены${NC}"
+		else
+			restore_services
+			check_error "Ошибка при удалении правил с портом 80"
+		fi
+	else
+		echo "${YELLOW}Правил перенаправления с порта 80 не обнаружено. Отключение не требуется${NC}"
+	fi
+
+	# Установка certbot без дополнительных nginx и apache компонентов
+	echo "${YELLOW}Установка Certbot...${NC}"
+	if ! ensure_certbot_available; then
+		restore_rules
+		restore_services
+		check_error "Не удалось установить Certbot"
+	fi
+
+	# Удаляю файл дефолтной задачи certbot в systemd
+	if [ -f /etc/cron.d/certbot ]; then
+		rm -f /etc/cron.d/certbot
+	fi
+
+	# Измененный вызов certbot (с учетом нужна рассылка или нет)
+	if [[ -n "$EMAIL" ]]; then
+		if ! certbot certonly --standalone --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN"; then
+			restore_rules
+			restore_services
+			check_error "Не удалось получить сертификат Let's Encrypt"
+		fi
+	else
+		if ! certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN"; then
+			restore_rules
+			restore_services
+			check_error "Не удалось получить сертификат Let's Encrypt"
+		fi
+	fi
+
+	# Улучшена проверка получения сертификата
+	if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+		restore_rules
+		restore_services
+		check_error "Не удалось получить сертификат Let's Encrypt"
+	fi
+
+	restore_rules
+	restore_services
+
+	# Создание cron-задачи
+	SCRIPT_CRON_PATH="/usr/local/bin/renew_cert.sh"
+	if ! [ -d "$(dirname "$SCRIPT_CRON_PATH")" ]; then
+		sudo mkdir -p "$(dirname "$SCRIPT_CRON_PATH")"
+	fi
+	if [ -f "$SCRIPT_CRON_PATH" ]; then
+		rm -f "$SCRIPT_CRON_PATH"
+	fi
+
+	cat >"$SCRIPT_CRON_PATH" <<EOF
+#!/bin/bash
+
+SERVICE_BUSY=\$(ss -tlpn | grep ':80' | awk -F'[(),"]' '{print \$4; exit}')
+if [ -n "\$SERVICE_BUSY" ] && systemctl is-enabled "\$SERVICE_BUSY" && systemctl is-active "\$SERVICE_BUSY"; then
+    systemctl stop "\$SERVICE_BUSY"
+fi
+if systemctl is-enabled "$SERVICE_NAME" &> /dev/null && systemctl is-active "$SERVICE_NAME"; then
+    systemctl stop "$SERVICE_NAME"
+fi
+
+SAVE_RULES=\$(iptables-save)
+PORT80_RULES=\$(iptables-save | grep "PREROUTING.*-p tcp.*--dport 80" | grep "\$(ip route | grep default | awk '{print \$5}')")
+if [ -n "\$PORT80_RULES" ]; then
+    while read -r line; do
+        iptables -t nat -D \$(echo \$line | sed 's/^-A //')
+    done <<< "\$PORT80_RULES"
+fi
+
+certbot renew --quiet
+
+if [ -n "\$SAVE_RULES" ]; then
+    echo "\$SAVE_RULES" | iptables-restore
+fi
+
+if [ -n "\$SERVICE_BUSY" ] && systemctl is-enabled "\$SERVICE_BUSY" && ! systemctl is-active "\$SERVICE_BUSY"; then
+    systemctl start "\$SERVICE_BUSY"
+fi
+
+if systemctl is-enabled "$SERVICE_NAME" && ! systemctl is-active "$SERVICE_NAME"; then
+            systemctl start "$SERVICE_NAME"
+fi
+EOF
+
+	chmod +x "$SCRIPT_CRON_PATH"
+	(
+		crontab -l 2>/dev/null
+		echo "0 3 1 * * $SCRIPT_CRON_PATH"
+	) | crontab -
+
+	# Запись в базу пути скриптов Let's Encript и названия домена
+	set_env_value "USE_HTTPS" "true"
+	set_env_value "SESSION_COOKIE_SECURE" "true"
+	set_env_value "WTF_CSRF_SSL_STRICT" "true"
+	set_env_value "SSL_CERT" "/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+	set_env_value "SSL_KEY" "/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+	set_env_value "DOMAIN" "$DOMAIN"
+	unset_env_value "BIND"
+
+	echo "${GREEN}Let's Encrypt успешно настроен для домена $DOMAIN!${NC}"
+}
+
+setup_custom_certs() {
+	log "Настройка пользовательских сертификатов"
+	echo "${YELLOW}Настройка пользовательских сертификатов...${NC}"
+
+	while true; do
+		read -r -p "Введите доменное имя (например, example.com): " DOMAIN
+		if [[ $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+			break
+		else
+			echo "${RED}Неверный формат домена!${NC}"
+		fi
+	done
+
+	read -r -p "Введите полный путь к файлу сертификата (.crt или .pem): " CERT_PATH
+	read -r -p "Введите полный путь к файлу приватного ключа (.key): " KEY_PATH
+
+	if [ ! -f "$CERT_PATH" ] || [ ! -f "$KEY_PATH" ]; then
+		echo "${RED}Файлы сертификатов не найдены!${NC}"
+		return 1
+	fi
+
+	set_env_value "USE_HTTPS" "true"
+	set_env_value "SESSION_COOKIE_SECURE" "true"
+	set_env_value "WTF_CSRF_SSL_STRICT" "true"
+	set_env_value "SSL_CERT" "$CERT_PATH"
+	set_env_value "SSL_KEY" "$KEY_PATH"
+	set_env_value "DOMAIN" "$DOMAIN"
+	unset_env_value "BIND"
+
+	echo "${GREEN}Собственные сертификаты успешно настроены для домена $DOMAIN!${NC}"
+}
+
+# Установка с самоподписанным сертификатом
+setup_selfsigned() {
+	log "Настройка самоподписанного сертификата"
+	echo "${YELLOW}Настройка самоподписанного сертификата...${NC}"
+
+	mkdir -p /etc/ssl/private
+	openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+		-keyout /etc/ssl/private/admin-antizapret.key \
+		-out /etc/ssl/certs/admin-antizapret.crt \
+		-subj "/CN=$(hostname)" >/dev/null 2>&1
+
+	set_env_value "USE_HTTPS" "true"
+	set_env_value "SESSION_COOKIE_SECURE" "true"
+	set_env_value "WTF_CSRF_SSL_STRICT" "true"
+	set_env_value "SSL_CERT" "/etc/ssl/certs/admin-antizapret.crt"
+	set_env_value "SSL_KEY" "/etc/ssl/private/admin-antizapret.key"
+	unset_env_value "DOMAIN"
+	unset_env_value "BIND"
+
+	log "Самоподписанный сертификат создан"
+	echo "${GREEN}Самоподписанный сертификат успешно создан!${NC}"
+}
+
+configure_http() {
+	log "Настройка HTTP соединения"
+	echo "${YELLOW}Настройка HTTP соединения...${NC}"
+
+	set_secret_key_if_missing || return 1
+	set_env_value "APP_PORT" "$APP_PORT"
+	set_env_value "USE_HTTPS" "false"
+	set_env_value "SESSION_COOKIE_SECURE" "false"
+	set_env_value "WTF_CSRF_SSL_STRICT" "false"
+	unset_env_value "SSL_CERT"
+	unset_env_value "SSL_KEY"
+	unset_env_value "DOMAIN"
+	unset_env_value "BIND"
+
+	echo "${GREEN}HTTP соединение настроено на порту $APP_PORT!${NC}"
+}
+
+apply_nginx_reverse_proxy_env() {
+	local domain="$1"
+
+	set_env_value "USE_HTTPS" "false"
+	set_env_value "SESSION_COOKIE_SECURE" "true"
+	set_env_value "WTF_CSRF_SSL_STRICT" "true"
+	set_env_value "DOMAIN" "$domain"
+	set_env_value "BIND" "127.0.0.1"
+	set_env_value "TRUSTED_PROXY_IPS" "127.0.0.1,::1"
+	unset_env_value "SSL_CERT"
+	unset_env_value "SSL_KEY"
+}
+
+setup_nginx_letsencrypt() {
+	log "Настройка Nginx reverse proxy с Let's Encrypt"
+	echo "${YELLOW}Настройка Nginx как reverse proxy с Let's Encrypt...${NC}"
+
+	while true; do
+		read -r -p "Введите доменное имя (например, example.com): " DOMAIN
+		if [[ $DOMAIN =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+			break
+		else
+			echo "${RED}Неверный формат домена!${NC}"
+		fi
+	done
+
+	# Безопасное имя файла
+	NGINX_CONF_NAME=${DOMAIN//./_}
+	NGINX_CONF_FILE="/etc/nginx/sites-available/$NGINX_CONF_NAME"
+	NGINX_ENABLED_LINK="/etc/nginx/sites-enabled/$NGINX_CONF_NAME"
+
+	read -r -p "Введите email для уведомлений от Let's Encrypt (ENTER — пропустить): " EMAIL
+	if [[ -n "$EMAIL" ]]; then
+		if [[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+			:
+		else
+			echo "${RED}Неверный email, пропускаем.${NC}"
+			EMAIL=""
+		fi
+	fi
+
+	# Установка Nginx и Certbot
+	echo "${YELLOW}Установка Nginx и Certbot...${NC}"
+	apt-get update -qq
+	apt-get install -y -qq nginx >/dev/null 2>&1
+	if ! ensure_certbot_available; then
+		echo "${RED}Не удалось установить Certbot!${NC}"
+		return 1
+	fi
+
+	# Удаляем дефолтный сайт и старые конфиги
+	rm -f /etc/nginx/sites-enabled/default
+	rm -f "$NGINX_CONF_FILE" "$NGINX_ENABLED_LINK"
+
+	# Временно удаляем iptables-правила на 80 порт
+	SAVE_RULES=$(iptables-save)
+	PORT80_RULES=$(iptables-save | grep "PREROUTING.*-p tcp.*--dport 80" | grep "$(ip route | grep default | awk '{print $5}')")
+	if [ -n "$PORT80_RULES" ]; then
+		local -a rule_parts=()
+		while read -r line; do
+			read -r -a rule_parts <<<"${line#-A }"
+			iptables -t nat -D "${rule_parts[@]}"
+		done <<<"$PORT80_RULES"
+		echo "${GREEN}Все правила с портом 80 временно удалены${NC}"
+	else
+		echo "${YELLOW}Правил перенаправления с портом 80 не обнаружено${NC}"
+	fi
+
+	systemctl stop nginx
+
+	CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+
+	if [ -f "$CERT_PATH" ]; then
+		echo "${YELLOW}Сертификат для $DOMAIN уже существует. Используем существующий.${NC}"
+	else
+		echo "${YELLOW}Получение нового сертификата (standalone)...${NC}"
+		if [[ -n "$EMAIL" ]]; then
+			certbot certonly --standalone --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN" || {
+				echo "${RED}Ошибка получения сертификата!${NC}"
+				echo "$SAVE_RULES" | iptables-restore 2>/dev/null
+				systemctl start nginx 2>/dev/null
+				return 1
+			}
+		else
+			certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN" || {
+				echo "${RED}Ошибка получения сертификата!${NC}"
+				echo "$SAVE_RULES" | iptables-restore 2>/dev/null
+				systemctl start nginx 2>/dev/null
+				return 1
+			}
+		fi
+	fi
+
+	# Восстанавливаем iptables
+	if [ -n "$SAVE_RULES" ]; then
+		echo "$SAVE_RULES" | iptables-restore
+		echo "${YELLOW}Правила iptables восстановлены${NC}"
+	fi
+
+	cat >"$NGINX_CONF_FILE" <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=63072000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+	ln -sf "$NGINX_CONF_FILE" "$NGINX_ENABLED_LINK"
+
+	if ! nginx -t || ! systemctl start nginx; then
+		echo "${RED}Ошибка запуска Nginx! Вывод nginx -t:${NC}"
+		nginx -t
+		return 1
+	fi
+
+	systemctl enable --now snap.certbot.renew.timer 2>/dev/null || true
+
+	apply_nginx_reverse_proxy_env "$DOMAIN"
+
+	echo "${YELLOW}Nginx с Let's Encrypt успешно настроен для $DOMAIN!${NC}"
+	echo "${YELLOW}Конфиг сохранён как: $NGINX_CONF_FILE${NC}"
+}
+
+# Функция изменения протокола
+change_protocol() {
+	log "Изменение протокола"
+	echo "${YELLOW}Изменение протокола соединения...${NC}"
+
+	# Проверяем текущий протокол
+	if grep -q "USE_HTTPS=true" "$INSTALL_DIR/.env"; then
+		current_protocol="HTTPS"
+	else
+		current_protocol="HTTP"
+	fi
+
+	echo "Текущий протокол: ${GREEN}$current_protocol${NC}"
+	echo ""
+	echo "Выберите новый протокол:"
+	echo "1) HTTPS (Защищенное соединение)"
+	echo "2) HTTP (Не защищенное соединение)"
+		read -r -p "Ваш выбор [1-2]: " protocol_choice
+
+	case $protocol_choice in
+	1)
+		# Переход на HTTPS
+		echo "${YELLOW}Выберите тип HTTPS соединения:${NC}"
+		echo "  1) Let's Encrypt (TLS в Gunicorn, standalone certbot)"
+		echo "  2) Nginx reverse proxy + Let's Encrypt (рекомендуется)"
+		echo "  3) Собственные сертификаты"
+		echo "  4) Самоподписанный сертификат"
+		read -r -p "Ваш выбор [1-4]: " ssl_sub_choice
+
+		case $ssl_sub_choice in
+		1) setup_letsencrypt ;;
+		2) setup_nginx_letsencrypt ;;
+		3) setup_custom_certs ;;
+		4) setup_selfsigned ;;
+		*)
+			echo "${RED}Неверный выбор!${NC}"
+			return 1
+			;;
+		esac
+		;;
+	2)
+		# Переход на HTTP
+		configure_http
+		;;
+	*)
+		echo "${RED}Неверный выбор!${NC}"
+		return 1
+		;;
+	esac
+
+	# Перезапуск сервиса
+	systemctl restart "$SERVICE_NAME"
+	echo "${GREEN}Протокол успешно изменен!${NC}"
+	press_any_key
+}

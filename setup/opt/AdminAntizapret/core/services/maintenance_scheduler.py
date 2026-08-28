@@ -1,0 +1,346 @@
+import glob
+import os
+import shlex
+import subprocess
+
+
+class MaintenanceSchedulerService:
+    def __init__(
+        self,
+        *,
+        app_root,
+        logs_dir,
+        python_executable,
+        status_log_cleanup_marker,
+        status_log_cleanup_periods,
+        traffic_sync_cron_marker,
+        traffic_sync_cron_expr,
+        traffic_sync_enabled,
+        wg_policy_sync_cron_marker,
+        wg_policy_sync_cron_expr,
+        wg_policy_sync_enabled,
+        nightly_idle_restart_marker,
+        app_backup_cron_marker,
+        runtime_backup_cleanup_marker,
+        runtime_backup_cleanup_cron_expr,
+        runtime_backup_root,
+        runtime_backup_retention_hours,
+        runtime_backup_cleanup_enabled=True,
+        is_valid_cron_expression,
+        get_nightly_idle_restart_settings,
+        get_backup_settings,
+    ):
+        self.app_root = app_root
+        self.logs_dir = logs_dir
+        self.python_executable = python_executable or "python3"
+        self.status_log_cleanup_marker = status_log_cleanup_marker
+        self.status_log_cleanup_periods = status_log_cleanup_periods
+        self.traffic_sync_cron_marker = traffic_sync_cron_marker
+        self.traffic_sync_cron_expr = traffic_sync_cron_expr
+        self.traffic_sync_enabled = bool(traffic_sync_enabled)
+        self.wg_policy_sync_cron_marker = wg_policy_sync_cron_marker
+        self.wg_policy_sync_cron_expr = wg_policy_sync_cron_expr
+        self.wg_policy_sync_enabled = bool(wg_policy_sync_enabled)
+        self.nightly_idle_restart_marker = nightly_idle_restart_marker
+        self.app_backup_cron_marker = app_backup_cron_marker
+        self.runtime_backup_cleanup_marker = runtime_backup_cleanup_marker
+        self.runtime_backup_cleanup_cron_expr = runtime_backup_cleanup_cron_expr
+        self.runtime_backup_root = runtime_backup_root
+        self.runtime_backup_retention_hours = max(0, int(runtime_backup_retention_hours or 0))
+        self.runtime_backup_cleanup_enabled = bool(runtime_backup_cleanup_enabled)
+        self.is_valid_cron_expression = is_valid_cron_expression
+        self.get_nightly_idle_restart_settings = get_nightly_idle_restart_settings
+        self.get_backup_settings = get_backup_settings
+
+    def status_log_cleanup_command(self):
+        quoted_logs_dir = shlex.quote(self.logs_dir)
+        return (
+            f"find {quoted_logs_dir} -maxdepth 1 -type f "
+            "-name '*.log' ! -name '*-status.log' -delete >/dev/null 2>&1"
+        )
+
+    def read_crontab_lines(self):
+        try:
+            result = subprocess.run(
+                ["crontab", "-l"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip().lower()
+            if "no crontab for" in stderr:
+                return []
+            return None
+
+        return [line.rstrip("\n") for line in result.stdout.splitlines()]
+
+    def write_crontab_lines(self, lines):
+        payload = "\n".join(lines).strip()
+        if payload:
+            payload += "\n"
+
+        subprocess.run(
+            ["crontab", "-"],
+            input=payload,
+            text=True,
+            check=True,
+        )
+
+    def strip_status_cleanup_jobs(self, lines):
+        return [line for line in lines if self.status_log_cleanup_marker not in line]
+
+    def _cron_log_redirect(self, log_basename):
+        log_dir = os.path.join(self.app_root, "logs")
+        log_path = os.path.join(log_dir, log_basename)
+        quoted_log_path = shlex.quote(log_path)
+        return f">> {quoted_log_path} 2>&1"
+
+    def _scheduled_python_command(self, script_basename, log_basename):
+        python_bin = shlex.quote(self.python_executable)
+        script_path = shlex.quote(os.path.join(self.app_root, "utils", script_basename))
+        log_dir = shlex.quote(os.path.join(self.app_root, "logs"))
+        return (
+            f"mkdir -p {log_dir} && {python_bin} {script_path} "
+            f"{self._cron_log_redirect(log_basename)}"
+        )
+
+    def traffic_sync_command(self):
+        return self._scheduled_python_command("traffic_sync.py", "traffic_sync.log")
+
+    def nightly_idle_restart_command(self):
+        return self._scheduled_python_command(
+            "nightly_idle_restart.py", "nightly_idle_restart.log"
+        )
+
+    def wg_policy_sync_command(self):
+        return self._scheduled_python_command("wg_awg_policy_sync.py", "wg_policy_sync.log")
+
+    def app_backup_command(self):
+        return self._scheduled_python_command("app_auto_backup.py", "app_auto_backup.log")
+
+    def runtime_backup_cleanup_command(self):
+        quoted_backup_root = shlex.quote(self.runtime_backup_root)
+        retention_minutes = self.runtime_backup_retention_hours * 60
+        return (
+            f"mkdir -p {quoted_backup_root} && "
+            f"find {quoted_backup_root} -mindepth 1 -maxdepth 1 -type d "
+            f"-mmin +{retention_minutes} -exec rm -rf {{}} + >/dev/null 2>&1"
+        )
+
+    def is_systemd_traffic_sync_timer_enabled(self):
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-enabled", "admin-antizapret-traffic-sync.timer"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def ensure_traffic_sync_cron(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab для авто-синхронизации трафика."
+
+        lines = [line for line in lines if self.traffic_sync_cron_marker not in line]
+
+        if self.is_systemd_traffic_sync_timer_enabled():
+            try:
+                self.write_crontab_lines(lines)
+            except Exception as e:
+                return False, f"Ошибка очистки cron sync при активном timer: {e}"
+            return True, "Systemd timer sync активен, cron sync не требуется"
+
+        if self.traffic_sync_enabled:
+            command = self.traffic_sync_command()
+            lines.append(f"{self.traffic_sync_cron_expr} {command} {self.traffic_sync_cron_marker}")
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи cron sync: {e}"
+
+        if self.traffic_sync_enabled:
+            return True, "Cron sync трафика включен"
+        return True, "Cron sync трафика отключен"
+
+    def ensure_nightly_idle_restart_cron(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab для ночного рестарта сайта."
+
+        nightly_enabled, nightly_cron_expr = self.get_nightly_idle_restart_settings()
+        if nightly_enabled and not self.is_valid_cron_expression(nightly_cron_expr):
+            return False, "Некорректное cron-выражение для ночного рестарта."
+
+        lines = [line for line in lines if self.nightly_idle_restart_marker not in line]
+
+        if nightly_enabled:
+            command = self.nightly_idle_restart_command()
+            lines.append(f"{nightly_cron_expr} {command} {self.nightly_idle_restart_marker}")
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи cron ночного рестарта: {e}"
+
+        if nightly_enabled:
+            return True, "Cron ночного рестарта включен"
+        return True, "Cron ночного рестарта отключен"
+
+    def ensure_wg_policy_sync_cron(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab для синхронизации WG/AWG-политик."
+
+        lines = [line for line in lines if self.wg_policy_sync_cron_marker not in line]
+
+        if self.wg_policy_sync_enabled:
+            if not self.is_valid_cron_expression(self.wg_policy_sync_cron_expr):
+                return False, "Некорректное cron-выражение для синхронизации WG/AWG-политик."
+            command = self.wg_policy_sync_command()
+            lines.append(f"{self.wg_policy_sync_cron_expr} {command} {self.wg_policy_sync_cron_marker}")
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи cron синхронизации WG/AWG-политик: {e}"
+
+        if self.wg_policy_sync_enabled:
+            return True, "Cron синхронизации WG/AWG-политик включен"
+        return True, "Cron синхронизации WG/AWG-политик отключен"
+
+    def _app_backup_cron_expr(self, interval_days, time_hhmm):
+        minute_str, hour_str = str(time_hhmm or "03:00").split(":", 1)
+        minute = max(0, min(59, int(minute_str)))
+        hour = max(0, min(23, int(hour_str)))
+        if int(interval_days) == 1:
+            return f"{minute} {hour} * * *"
+        return f"{minute} {hour} */{int(interval_days)} * *"
+
+    def ensure_app_backup_cron(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab для авто-бэкапов."
+
+        lines = [line for line in lines if self.app_backup_cron_marker not in line]
+        backup_settings = self.get_backup_settings() or {}
+        enabled = bool(backup_settings.get("enabled", False))
+        interval_days = int(backup_settings.get("interval_days", 1))
+        if interval_days not in (1, 7, 30):
+            interval_days = 1
+        time_hhmm = str(backup_settings.get("time_hhmm", "03:00") or "03:00")
+
+        if enabled:
+            try:
+                cron_expr = self._app_backup_cron_expr(interval_days, time_hhmm)
+            except Exception:
+                return False, "Некорректное время для авто-бэкапа."
+            if not self.is_valid_cron_expression(cron_expr):
+                return False, "Некорректное cron-выражение для авто-бэкапа."
+            command = self.app_backup_command()
+            lines.append(f"{cron_expr} {command} {self.app_backup_cron_marker}")
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи cron авто-бэкапа: {e}"
+
+        if enabled:
+            return True, "Cron авто-бэкапа включен"
+        return True, "Cron авто-бэкапа отключен"
+
+    def ensure_runtime_backup_cleanup_cron(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab для очистки runtime_backups."
+
+        lines = [line for line in lines if self.runtime_backup_cleanup_marker not in line]
+
+        if self.runtime_backup_cleanup_enabled and self.runtime_backup_retention_hours > 0:
+            if not self.is_valid_cron_expression(self.runtime_backup_cleanup_cron_expr):
+                return False, "Некорректное cron-выражение для очистки runtime_backups."
+            command = self.runtime_backup_cleanup_command()
+            lines.append(
+                f"{self.runtime_backup_cleanup_cron_expr} {command} {self.runtime_backup_cleanup_marker}"
+            )
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи cron очистки runtime_backups: {e}"
+
+        if self.runtime_backup_cleanup_enabled and self.runtime_backup_retention_hours > 0:
+            return True, (
+                "Cron очистки runtime_backups включен "
+                f"(хранение: {self.runtime_backup_retention_hours} ч)"
+            )
+        return True, "Cron очистки runtime_backups отключен"
+
+    def get_status_cleanup_schedule(self):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return {
+                "period": "none",
+                "label": "Недоступно (cron не найден)",
+                "available": False,
+            }
+
+        for line in lines:
+            if self.status_log_cleanup_marker not in line:
+                continue
+
+            marker_part = line.split(self.status_log_cleanup_marker, 1)[-1].strip()
+            period = "none"
+            if marker_part.startswith(":"):
+                period = marker_part[1:]
+
+            period = period if period in self.status_log_cleanup_periods else "none"
+            label = self.status_log_cleanup_periods.get(period, (None, "Выключено"))[1]
+            return {"period": period, "label": label, "available": True}
+
+        return {"period": "none", "label": "Выключено", "available": True}
+
+    def set_status_cleanup_schedule(self, period):
+        lines = self.read_crontab_lines()
+        if lines is None:
+            return False, "Не удалось прочитать crontab (cron недоступен)."
+
+        lines = self.strip_status_cleanup_jobs(lines)
+
+        if period in self.status_log_cleanup_periods:
+            cron_expr, _ = self.status_log_cleanup_periods[period]
+            cmd = self.status_log_cleanup_command()
+            lines.append(f"{cron_expr} {cmd} {self.status_log_cleanup_marker}:{period}")
+
+        try:
+            self.write_crontab_lines(lines)
+        except Exception as e:
+            return False, f"Ошибка записи crontab: {e}"
+
+        if period in self.status_log_cleanup_periods:
+            return True, f"Расписание очистки *.log (кроме *-status.log) установлено: {self.status_log_cleanup_periods[period][1]}"
+        return True, "Расписание очистки *.log (кроме *-status.log) отключено"
+
+    def cleanup_status_logs_now(self):
+        pattern = os.path.join(self.logs_dir, "*.log")
+        deleted = 0
+        failed = []
+
+        for file_path in glob.glob(pattern):
+            try:
+                if os.path.isfile(file_path) and not file_path.endswith("-status.log"):
+                    os.remove(file_path)
+                    deleted += 1
+            except Exception:
+                failed.append(os.path.basename(file_path))
+
+        if failed:
+            return False, f"Удалено обычных .log: {deleted}. Ошибки: {', '.join(failed)}"
+        return True, f"Удалено обычных .log (без *-status.log): {deleted}"

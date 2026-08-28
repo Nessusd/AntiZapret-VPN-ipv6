@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="csrf-token" content="{{ csrf_token() }}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/static/assets/img/favicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/theme.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/styles_index.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/styles_mobile.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/base.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='assets/css/notifications.css') }}" />
+  {% block extra_css %}{% endblock %}
+  <title>{% block title %}AdminPanel Claymore{% endblock %}</title>
+</head>
+
+{% set endpoint = request.endpoint if request and request.endpoint else "" %}
+
+<body
+  class="{% if endpoint in ['index', 'edit_files', 'server_monitor', 'logs_dashboard', 'settings'] %}index-page-dark{% endif %}{% if endpoint == 'server_monitor' %} server-monitor-page{% endif %}{% if endpoint == 'settings' %} settings-nav-merged{% endif %}">
+
+  <script id="base-flash-messages" type="application/json" nonce="{{ csp_nonce }}">
+    {{ get_flashed_messages(with_categories=True) | tojson }}
+  </script>
+
+  <div class="app-shell">
+    <nav class="navigation" aria-label="Основная навигация">
+      <div class="nav-brand-row">
+        <div class="nav-brand">
+          <span class="nav-brand-kicker">AdminAntizapret</span>
+          <strong class="nav-brand-title">Control Panel</strong>
+        </div>
+        <button class="nav-mobile-toggle" type="button" aria-expanded="false"
+          aria-controls="navMobileContent" aria-label="Открыть меню">
+          <span class="nav-mobile-toggle-icon" aria-hidden="true">☰</span>
+        </button>
+      </div>
+
+      <div class="nav-content" id="navMobileContent">
+        <div class="nav-group">
+          <a href="{{ url_for('index') }}" class="nav-link{% if endpoint == 'index' %} is-active{% endif %}">Главная</a>
+          {% if current_user and current_user.is_admin() %}
+          {% if feature_modules.get('edit_files', true) %}
+          <a href="{{ url_for('edit_files') }}"
+            class="nav-link{% if endpoint == 'edit_files' %} is-active{% endif %}">Редактировать файлы</a>
+          {% endif %}
+          {% if feature_modules.get('server_monitor', true) %}
+          <a href="{{ url_for('server_monitor') }}"
+            class="nav-link{% if endpoint == 'server_monitor' %} is-active{% endif %}">Мониторинг сервера</a>
+          {% endif %}
+
+          {% if feature_modules.get('logs_dashboard', true) %}
+          <div class="nav-settings-group{% if endpoint == 'logs_dashboard' %} is-open{% endif %}">
+            <a href="{{ url_for('logs_dashboard') }}"
+              class="nav-link nav-link-settings{% if endpoint == 'logs_dashboard' %} is-active{% endif %}">
+              <span>Подключенные клиенты</span>
+              <span class="nav-settings-caret" aria-hidden="true">▾</span>
+            </a>
+
+            <div class="nav-settings-submenu" aria-label="Разделы подключенных клиентов">
+              <a href="{{ url_for('logs_dashboard', _anchor='overview') }}" class="nav-sublink"
+                data-logs-tab="overview">Обзор</a>
+              <a href="{{ url_for('logs_dashboard', _anchor='clients') }}" class="nav-sublink"
+                data-logs-tab="clients">Клиенты</a>
+              <a href="{{ url_for('logs_dashboard', _anchor='traffic') }}" class="nav-sublink"
+                data-logs-tab="traffic">Трафик (БД)</a>
+            </div>
+          </div>
+          {% endif %}
+
+          {% if feature_modules.get('routing', true) %}
+          <div class="nav-settings-group{% if endpoint == 'routing' %} is-open{% endif %}">
+            <a href="{{ url_for('routing') }}"
+              class="nav-link nav-link-settings{% if endpoint == 'routing' %} is-active{% endif %}">
+              <span>Маршрутизация</span>
+              <span class="nav-settings-caret" aria-hidden="true">▾</span>
+            </a>
+
+            <div class="nav-settings-submenu" aria-label="Разделы маршрутизации">
+              <a href="{{ url_for('routing', _anchor='antizapret-config') }}" class="nav-sublink"
+                data-settings-tab="antizapret-config">Фильтры и сервисы</a>
+              <a href="{{ url_for('routing', _anchor='cidr-update') }}" class="nav-sublink"
+                data-settings-tab="cidr-update">Обновление IP-списков</a>
+              <a href="{{ url_for('routing', _anchor='game-filters') }}" class="nav-sublink"
+                data-settings-tab="game-filters">Игровые серверы</a>
+            </div>
+          </div>
+          {% endif %}
+
+          <div class="nav-settings-group{% if endpoint == 'settings' %} is-open{% endif %}">
+            <a href="{{ url_for('settings') }}"
+              class="nav-link nav-link-settings{% if endpoint == 'settings' %} is-active{% endif %}">
+              <span>Настройки</span>
+              <span class="nav-settings-caret" aria-hidden="true">▾</span>
+            </a>
+
+            <div class="nav-settings-submenu" aria-label="Разделы настроек">
+              {% if feature_modules.get('vpn_network', true) %}
+              <a href="{{ url_for('settings', _anchor='vpn-network') }}" class="nav-sublink"
+                data-settings-tab="vpn-network">Порт, HTTPS и Nginx</a>
+              {% endif %}
+              {% if feature_modules.get('security', true) %}
+              <a href="{{ url_for('settings', _anchor='security') }}" class="nav-sublink"
+                data-settings-tab="security">Безопасность</a>
+              {% endif %}
+              {% if feature_modules.get('telegram', true) %}
+              <a href="{{ url_for('settings', _anchor='telegram-auth') }}" class="nav-sublink"
+                data-settings-tab="telegram-auth">Telegram авторизация</a>
+              {% endif %}
+              {% if feature_modules.get('user_management', true) %}
+              <a href="{{ url_for('settings', _anchor='user-management') }}" class="nav-sublink"
+                data-settings-tab="user-management">Пользователи и доступ</a>
+              {% endif %}
+              {% if feature_modules.get('qr_downloads', true) %}
+              <a href="{{ url_for('settings', _anchor='qr-settings') }}" class="nav-sublink"
+                data-settings-tab="qr-settings">Одноразовые ссылки</a>
+              {% endif %}
+              {% if feature_modules.get('maintenance', true) or feature_modules.get('backups', true) %}
+              <a href="{{ url_for('settings', _anchor='maintenance') }}" class="nav-sublink"
+                data-settings-tab="maintenance">Обслуживание</a>
+              {% endif %}
+              <a href="{{ url_for('settings', _anchor='feature-toggles') }}" class="nav-sublink"
+                data-settings-tab="feature-toggles">Модули и задачи</a>
+              {% if feature_modules.get('action_logs', true) %}
+              <a href="{{ url_for('settings', _anchor='action-logs') }}" class="nav-sublink"
+                data-settings-tab="action-logs">Логи действий</a>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if current_user %}
+        <div class="user-info-block">
+          <div class="user-info">
+            <span class="username">{{ current_user.username }}</span>
+            <span class="user-role {% if current_user.is_admin() %}role-admin{% else %}role-viewer{% endif %}">
+              {% if current_user.is_admin() %}Admin{% else %}Viewer{% endif %}
+            </span>
+          </div>
+          <a href="{{ url_for('logout') }}" class="nav-link nav-link-logout">Выход</a>
+        </div>
+        {% endif %}
+      </div>
+    </nav>
+
+    <main class="app-main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='assets/js/notifications.js') }}"></script>
+  <script src="{{ url_for('static', filename='assets/js/csp_handlers.js') }}"></script>
+  {% block scripts %}{% endblock %}
+
+  <script nonce="{{ csp_nonce }}">
+    (function () {
+      const nav = document.querySelector(".navigation");
+      const toggle = nav && nav.querySelector(".nav-mobile-toggle");
+      const content = document.getElementById("navMobileContent");
+      if (!nav || !toggle || !content) return;
+
+      const mq = window.matchMedia("(max-width: 1024px)");
+
+      function setOpen(open) {
+        nav.classList.toggle("nav-is-open", open);
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.setAttribute("aria-label", open ? "Закрыть меню" : "Открыть меню");
+        toggle.querySelector(".nav-mobile-toggle-icon").textContent = open ? "✕" : "☰";
+        document.body.classList.toggle("nav-mobile-open", open);
+        content.hidden = !open;
+      }
+
+      function sync() {
+        if (!mq.matches) {
+          nav.classList.remove("nav-is-open", "nav-mobile-mode");
+          document.body.classList.remove("nav-mobile-open");
+          content.hidden = false;
+        } else {
+          nav.classList.add("nav-mobile-mode");
+          if (!nav.classList.contains("nav-is-open")) {
+            content.hidden = true;
+          }
+        }
+      }
+
+      toggle.addEventListener("click", () => {
+        if (mq.matches) setOpen(!nav.classList.contains("nav-is-open"));
+      });
+
+      nav.querySelectorAll(".nav-link, .nav-sublink").forEach((link) => {
+        link.addEventListener("click", () => {
+          if (mq.matches) setOpen(false);
+        });
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && mq.matches && nav.classList.contains("nav-is-open")) {
+          setOpen(false);
+        }
+      });
+
+      document.addEventListener("click", (e) => {
+        if (mq.matches && nav.classList.contains("nav-is-open") && !nav.contains(e.target)) {
+          setOpen(false);
+        }
+      });
+
+      if (typeof mq.addEventListener === "function") {
+        mq.addEventListener("change", sync);
+      } else if (typeof mq.addListener === "function") {
+        mq.addListener(sync);
+      }
+
+      sync();
+    })();
+  </script>
+
+  <script nonce="{{ csp_nonce }}">
+    (function () {
+      const flashPayload = document.getElementById("base-flash-messages");
+      if (!flashPayload) {
+        return;
+      }
+
+      let flashed = [];
+      try {
+        flashed = JSON.parse(flashPayload.textContent || "[]");
+      } catch (_error) {
+        flashed = [];
+      }
+
+      if (!Array.isArray(flashed) || flashed.length === 0) {
+        return;
+      }
+
+      if (typeof window.showNotification !== "function") {
+        return;
+      }
+
+      const normalizeType = window.normalizeNotificationType || ((rawCategory) => {
+        const category = String(rawCategory || "info").toLowerCase();
+        if (["error", "danger"].includes(category)) return "error";
+        if (["success", "ok"].includes(category)) return "success";
+        if (["warning", "warn"].includes(category)) return "warning";
+        return "info";
+      });
+
+      flashed.forEach((entry, index) => {
+        const category = Array.isArray(entry) ? entry[0] : "info";
+        const message = Array.isArray(entry) ? entry[1] : String(entry || "");
+        if (!message) {
+          return;
+        }
+        setTimeout(() => window.showNotification(message, normalizeType(category)), index * 150);
+      });
+    })();
+  </script>
+
+  {% if current_user %}
+  <script nonce="{{ csp_nonce }}">
+    (function () {
+      const heartbeatIntervalMs = 60000;
+
+      async function sendSessionHeartbeat() {
+        if (document.visibilityState !== "visible") {
+          return;
+        }
+
+        try {
+          await fetch("{{ url_for('api_session_heartbeat') }}", {
+            method: "GET",
+            cache: "no-store",
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" }
+          });
+        } catch (e) {
+          // Тихо игнорируем сетевые ошибки heartbeat.
+        }
+      }
+
+      setInterval(sendSessionHeartbeat, heartbeatIntervalMs);
+      sendSessionHeartbeat();
+    })();
+  </script>
+  {% endif %}
+</body>
+
+</html>

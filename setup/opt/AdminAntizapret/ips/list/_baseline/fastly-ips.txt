@@ -1,0 +1,3 @@
+# Auto-generated CIDR list for fastly-ips.txt
+# Source: pending update
+# Generated at: bootstrap

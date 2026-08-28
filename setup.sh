@@ -65,6 +65,13 @@ INSTALL_ROLLBACK_TCP4_PORTS=
 INSTALL_ROLLBACK_UDP4_PORTS=
 INSTALL_ROLLBACK_TCP6_PORTS=
 INSTALL_ROLLBACK_UDP6_PORTS=
+PANEL_INSTALL_DIR=/opt/AdminAntizapret
+PANEL_SERVICE=admin-antizapret.service
+PANEL_TRAFFIC_SERVICE=admin-antizapret-traffic-sync.service
+PANEL_TRAFFIC_TIMER=admin-antizapret-traffic-sync.timer
+PANEL_CRONTAB_PATH=/var/spool/cron/crontabs/root
+PANEL_LEGACY_MANAGER=/root/AdminPanel/adminpanel.sh
+PANEL_STATE_STAGING=
 INSTALL_TRANSACTION_PATHS=(
 	/root/easyrsa3
 	/root/wireguard
@@ -206,6 +213,321 @@ declare -A INSTALL_TRANSACTION_ACTIVE=()
 declare -A INSTALL_TRANSACTION_ENABLED=()
 declare -A INSTALL_TRANSACTION_SYSCTL=()
 declare -A INSTALL_ROLLBACK_CURRENT_ACTIVE=()
+
+configure_panel_transaction_scope() {
+	local unit
+	local -a panel_units=(
+		"$PANEL_SERVICE"
+		"$PANEL_TRAFFIC_SERVICE"
+		"$PANEL_TRAFFIC_TIMER"
+	)
+
+	# Refusing panel installation must not change an existing panel, its units,
+	# configuration, schedules, certificates or runtime data.
+	[[ "$INSTALL_PANEL" == 'y' ]] || return 0
+
+	INSTALL_TRANSACTION_PATHS+=(
+		"$PANEL_INSTALL_DIR"
+		/etc/systemd/system/admin-antizapret.service
+		/etc/systemd/system/admin-antizapret-traffic-sync.service
+		/etc/systemd/system/admin-antizapret-traffic-sync.timer
+		"$PANEL_CRONTAB_PATH"
+		/root/AdminPanel
+	)
+	case "${PANEL_MODE:-preserve}" in
+		selfsigned)
+			INSTALL_TRANSACTION_PATHS+=(
+				/etc/ssl/certs/admin-antizapret.crt
+				/etc/ssl/private/admin-antizapret.key
+			)
+			;;
+		letsencrypt|nginx-letsencrypt)
+			INSTALL_TRANSACTION_PATHS+=(/etc/letsencrypt)
+			;;
+	esac
+	if [[ "${PANEL_MODE:-}" == 'nginx-letsencrypt' ]]; then
+		local nginx_config_name="${PANEL_DOMAIN//./_}"
+		INSTALL_TRANSACTION_PATHS+=(
+			"/etc/nginx/sites-available/$nginx_config_name"
+			"/etc/nginx/sites-enabled/$nginx_config_name"
+		)
+		INSTALL_TRANSACTION_UNITS+=(nginx.service)
+		INSTALL_STOP_UNITS+=(nginx.service)
+		INSTALL_START_UNITS+=(nginx.service)
+	fi
+
+	for unit in "${panel_units[@]}"; do
+		INSTALL_TRANSACTION_UNITS+=("$unit")
+		INSTALL_STOP_UNITS+=("$unit")
+		INSTALL_MAINTENANCE_STOP_UNITS+=("$unit")
+		INSTALL_START_UNITS+=("$unit")
+	done
+}
+
+read_panel_env_value() {
+	local key=$1 env_file="$PANEL_INSTALL_DIR/.env"
+	[[ -f "$env_file" ]] || return 0
+	sed -n "s/^${key}=//p" "$env_file" | tail -n 1
+}
+
+prompt_panel_configuration() {
+	local current_port
+
+	PANEL_MODE=preserve
+	PANEL_PORT="$(read_panel_env_value APP_PORT)"
+	PANEL_PORT="${PANEL_PORT:-5050}"
+	PANEL_DOMAIN="$(read_panel_env_value DOMAIN)"
+	PANEL_EMAIL=
+	PANEL_CERT_PATH="$(read_panel_env_value SSL_CERT)"
+	PANEL_KEY_PATH="$(read_panel_env_value SSL_KEY)"
+
+	[[ "$INSTALL_PANEL" == 'y' && "$PANEL_RECONFIGURE" == 'y' ]] || return 0
+
+	echo 'Choose AdminAntizapret publication mode:'
+	echo '    1) HTTPS with a self-signed certificate'
+	echo "    2) HTTP"
+	echo "    3) HTTPS with Let's Encrypt (direct Gunicorn)"
+	echo "    4) HTTPS with Let's Encrypt and Nginx"
+	echo '    5) HTTPS with an existing certificate and key'
+	PANEL_MODE_CHOICE=
+	until [[ "$PANEL_MODE_CHOICE" =~ ^[1-5]$ ]]; do
+		read -rp 'Panel mode [1-5]: ' -e -i 1 PANEL_MODE_CHOICE
+	done
+	case "$PANEL_MODE_CHOICE" in
+		1) PANEL_MODE=selfsigned ;;
+		2) PANEL_MODE=http ;;
+		3) PANEL_MODE=letsencrypt ;;
+		4) PANEL_MODE=nginx-letsencrypt ;;
+		5) PANEL_MODE=custom ;;
+	esac
+
+	current_port=$PANEL_PORT
+	PANEL_PORT=
+	until [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] &&
+		(( 10#$PANEL_PORT >= 1 && 10#$PANEL_PORT <= 65535 ))
+	do
+		read -rp 'AdminAntizapret port [1-65535]: ' -e -i "$current_port" PANEL_PORT
+	done
+	PANEL_PORT=$((10#$PANEL_PORT))
+
+	case "$PANEL_MODE" in
+		letsencrypt|nginx-letsencrypt)
+			PANEL_DOMAIN=
+			until [[ "$PANEL_DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; do
+				read -rp 'Panel domain: ' PANEL_DOMAIN
+			done
+			read -rp "Let's Encrypt email (optional): " PANEL_EMAIL
+			;;
+		custom)
+			PANEL_DOMAIN=
+			until [[ "$PANEL_DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; do
+				read -rp 'Panel domain: ' PANEL_DOMAIN
+			done
+			until [[ -f "$PANEL_CERT_PATH" ]]; do
+				read -rp 'Full path to the TLS certificate: ' PANEL_CERT_PATH
+			done
+			until [[ -f "$PANEL_KEY_PATH" ]]; do
+				read -rp 'Full path to the TLS private key: ' PANEL_KEY_PATH
+			done
+			;;
+	esac
+}
+
+set_panel_env_value() {
+	local key=$1 value=$2 env_file="$PANEL_INSTALL_DIR/.env" temporary
+	temporary="$(mktemp "${env_file}.XXXXXX")" || return 1
+	if [[ -f "$env_file" ]]; then
+		sed "/^${key}=/d" "$env_file" > "$temporary" || return 1
+	fi
+	printf '%s=%s\n' "$key" "$value" >> "$temporary" || return 1
+	chmod 600 "$temporary" || return 1
+	mv -f -- "$temporary" "$env_file"
+}
+
+unset_panel_env_value() {
+	local key=$1 env_file="$PANEL_INSTALL_DIR/.env" temporary
+	[[ -f "$env_file" ]] || return 0
+	temporary="$(mktemp "${env_file}.XXXXXX")" || return 1
+	sed "/^${key}=/d" "$env_file" > "$temporary" || return 1
+	chmod 600 "$temporary" || return 1
+	mv -f -- "$temporary" "$env_file"
+}
+
+panel_public_ipv6() {
+	[[ "$DISABLE_IPV6" != 'y' ]] || return 0
+	ip -6 route get 2606:4700:4700::1111 2>/dev/null |
+		awk '{ for (i=1; i<=NF; i++) if ($i == "src" && $(i+1) !~ /^fe80:/) { print $(i+1); exit } }'
+}
+
+configure_panel_environment() {
+	local panel_ipv6 secret_key
+	local INSTALL_DIR="$PANEL_INSTALL_DIR"
+	local SCRIPT_SH_DIR="$PANEL_INSTALL_DIR/script_sh"
+	local INCLUDE_DIR="$SCRIPT_SH_DIR"
+	local VENV_PATH="$PANEL_INSTALL_DIR/venv"
+	local DB_FILE="$PANEL_INSTALL_DIR/instance/users.db"
+	local SERVICE_NAME=admin-antizapret
+	local ANTIZAPRET_INSTALL_DIR=/root/antizapret
+
+	install -d -m 700 "$PANEL_INSTALL_DIR/instance" "$PANEL_INSTALL_DIR/data" \
+		"$PANEL_INSTALL_DIR/logs" "$PANEL_INSTALL_DIR/ips/runtime_backups"
+	touch "$PANEL_INSTALL_DIR/.env"
+	chmod 600 "$PANEL_INSTALL_DIR/.env"
+
+	# shellcheck disable=SC1091
+	source "$PANEL_INSTALL_DIR/script_sh/env_defaults.sh"
+	ensure_env_defaults
+
+	if ! grep -q '^SECRET_KEY=.' "$PANEL_INSTALL_DIR/.env"; then
+		secret_key="$(openssl rand -hex 32)"
+		set_panel_env_value SECRET_KEY "$secret_key"
+	fi
+	set_panel_env_value INSTALL_DIR "$PANEL_INSTALL_DIR"
+	set_panel_env_value VENV_PATH "$PANEL_INSTALL_DIR/venv"
+	set_panel_env_value DB_FILE "$PANEL_INSTALL_DIR/instance/users.db"
+	set_panel_env_value ANTIZAPRET_INSTALL_DIR /root/antizapret
+	set_panel_env_value SERVICE_NAME admin-antizapret
+	set_panel_env_value ADMIN_ANTIZAPRET_SERVICE_NAME admin-antizapret
+	set_panel_env_value VNSTAT_IFACE "$DEFAULT_INTERFACE"
+
+	if [[ "$PANEL_MODE" == 'preserve' ]]; then
+		if [[ "$(read_panel_env_value BIND)" == '127.0.0.1' ]]; then
+			set_panel_env_value BIND_IPV6 ''
+		else
+			set_panel_env_value BIND_IPV6 "$(panel_public_ipv6)"
+		fi
+		return 0
+	fi
+	set_panel_env_value APP_PORT "$PANEL_PORT"
+	panel_ipv6="$(panel_public_ipv6)"
+	set_panel_env_value BIND 0.0.0.0
+	set_panel_env_value BIND_IPV6 "$panel_ipv6"
+
+	case "$PANEL_MODE" in
+		http)
+			set_panel_env_value USE_HTTPS false
+			set_panel_env_value SESSION_COOKIE_SECURE false
+			set_panel_env_value WTF_CSRF_SSL_STRICT false
+			unset_panel_env_value SSL_CERT
+			unset_panel_env_value SSL_KEY
+			unset_panel_env_value DOMAIN
+			;;
+		selfsigned)
+			install -d -m 700 /etc/ssl/private
+			openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+				-keyout /etc/ssl/private/admin-antizapret.key \
+				-out /etc/ssl/certs/admin-antizapret.crt \
+				-subj "/CN=$(hostname)" >/dev/null 2>&1
+			chmod 600 /etc/ssl/private/admin-antizapret.key
+			set_panel_env_value USE_HTTPS true
+			set_panel_env_value SESSION_COOKIE_SECURE true
+			set_panel_env_value WTF_CSRF_SSL_STRICT true
+			set_panel_env_value SSL_CERT /etc/ssl/certs/admin-antizapret.crt
+			set_panel_env_value SSL_KEY /etc/ssl/private/admin-antizapret.key
+			unset_panel_env_value DOMAIN
+			;;
+		custom)
+			set_panel_env_value USE_HTTPS true
+			set_panel_env_value SESSION_COOKIE_SECURE true
+			set_panel_env_value WTF_CSRF_SSL_STRICT true
+			set_panel_env_value SSL_CERT "$PANEL_CERT_PATH"
+			set_panel_env_value SSL_KEY "$PANEL_KEY_PATH"
+			set_panel_env_value DOMAIN "$PANEL_DOMAIN"
+			;;
+		letsencrypt|nginx-letsencrypt)
+			local -a certbot_args=(certonly --standalone --non-interactive --agree-tos -d "$PANEL_DOMAIN")
+			if [[ -n "$PANEL_EMAIL" ]]; then
+				certbot_args+=(-m "$PANEL_EMAIL")
+			else
+				certbot_args+=(--register-unsafely-without-email)
+			fi
+			certbot "${certbot_args[@]}"
+			set_panel_env_value SESSION_COOKIE_SECURE true
+			set_panel_env_value WTF_CSRF_SSL_STRICT true
+			set_panel_env_value DOMAIN "$PANEL_DOMAIN"
+			if [[ "$PANEL_MODE" == 'letsencrypt' ]]; then
+				set_panel_env_value USE_HTTPS true
+				set_panel_env_value SSL_CERT "/etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem"
+				set_panel_env_value SSL_KEY "/etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem"
+			else
+				set_panel_env_value USE_HTTPS false
+				set_panel_env_value BIND 127.0.0.1
+				set_panel_env_value BIND_IPV6 ''
+				unset_panel_env_value SSL_CERT
+				unset_panel_env_value SSL_KEY
+				configure_panel_nginx
+			fi
+			;;
+	esac
+}
+
+configure_panel_nginx() {
+	local config_name="${PANEL_DOMAIN//./_}"
+	local config_file="/etc/nginx/sites-available/${config_name}"
+	cat > "$config_file" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $PANEL_DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $PANEL_DOMAIN;
+    ssl_certificate /etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:$PANEL_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+	ln -sfn "$config_file" "/etc/nginx/sites-enabled/$config_name"
+	nginx -t
+}
+
+validate_panel_runtime() {
+	local bind_ipv6 panel_port scheme status
+	panel_port="$(read_panel_env_value APP_PORT)"
+	[[ "$panel_port" =~ ^[0-9]+$ ]] || return 1
+	if [[ "$(read_panel_env_value USE_HTTPS)" == 'true' ]]; then
+		scheme=https
+	else
+		scheme=http
+	fi
+	ss -H -ltn "sport = :$panel_port" | grep -q . || {
+		echo "Error: AdminAntizapret is not listening on TCP port $panel_port"
+		return 1
+	}
+	status="$(curl -k -sS -o /dev/null -w '%{http_code}' "$scheme://127.0.0.1:$panel_port/" || true)"
+	case "$status" in
+		200|302) ;;
+		*)
+			echo "Error: AdminAntizapret local health check returned HTTP $status"
+			return 1
+			;;
+	esac
+	bind_ipv6="$(read_panel_env_value BIND_IPV6)"
+	if [[ -n "$bind_ipv6" ]]; then
+		ss -H -ltn "sport = :$panel_port" | grep -Fq "[$bind_ipv6]:$panel_port" || {
+			echo "Error: AdminAntizapret is not listening on configured IPv6 $bind_ipv6:$panel_port"
+			return 1
+		}
+	fi
+	"$PANEL_INSTALL_DIR/venv/bin/python" - "$PANEL_INSTALL_DIR/instance/users.db" <<'PY'
+import sqlite3
+import sys
+
+with sqlite3.connect(sys.argv[1]) as connection:
+    result = connection.execute("PRAGMA quick_check").fetchone()
+if not result or result[0] != "ok":
+    raise SystemExit(f"SQLite quick_check failed: {result!r}")
+PY
+}
 
 acquire_install_lock() {
 	local hook_state=
@@ -1153,6 +1475,19 @@ echo
 until [[ "$WIREGUARD_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE
 done
+echo
+until [[ "$INSTALL_PANEL" =~ ^[yn]$ ]]; do
+	read -rp 'Install AdminAntizapret panel? [y/n]: ' -e -i y INSTALL_PANEL
+done
+PANEL_RECONFIGURE=y
+if [[ "$INSTALL_PANEL" == 'y' && -f "$PANEL_INSTALL_DIR/.antizapret-integrated" ]]; then
+	PANEL_RECONFIGURE=
+	until [[ "$PANEL_RECONFIGURE" =~ ^[yn]$ ]]; do
+		read -rp 'Reconfigure the existing AdminAntizapret panel? [y/n]: ' -e -i n PANEL_RECONFIGURE
+	done
+fi
+prompt_panel_configuration
+configure_panel_transaction_scope
 echo
 until [[ "$BGP_ENABLE" =~ ^[yn]$ ]]; do
 	read -rp 'Enable private BGP route delivery for router clients? [y/n]: ' -e -i "$OLD_BGP_ENABLE" BGP_ENABLE
@@ -2453,7 +2788,17 @@ OPENVPN_PATCH_PACKAGES=()
 if [[ "$OPENVPN_PATCH" != '0' ]]; then
 	OPENVPN_PATCH_PACKAGES=(tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev)
 fi
-apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_DCO_PACKAGES[@]}" "${OPENVPN_PATCH_PACKAGES[@]}"
+PANEL_PACKAGES=()
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	PANEL_DNS_PACKAGE=dnsutils
+	apt-cache show dnsutils >/dev/null 2>&1 || PANEL_DNS_PACKAGE=bind9-dnsutils
+	PANEL_PACKAGES=(python3-pip python3-venv python3-dev libjpeg-dev zlib1g-dev vnstat cron "$PANEL_DNS_PACKAGE" ca-certificates)
+	case "$PANEL_MODE" in
+		letsencrypt) PANEL_PACKAGES+=(certbot) ;;
+		nginx-letsencrypt) PANEL_PACKAGES+=(certbot nginx) ;;
+	esac
+fi
+apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_DCO_PACKAGES[@]}" "${OPENVPN_PATCH_PACKAGES[@]}" "${PANEL_PACKAGES[@]}"
 if [[ "$OPENVPN_DCO" == 'y' ]]; then
 	depmod -a
 	if ! modprobe ovpn; then
@@ -2514,6 +2859,35 @@ if [[ "$BGP_ENABLE" != 'y' ]]; then
 	rm -f /tmp/antizapret/setup/root/antizapret/bgp-update.py
 	rm -f /tmp/antizapret/setup/root/antizapret/bgp-firewall.sh
 	rm -f /tmp/antizapret/setup/etc/systemd/system/antizapret-bgp.service
+fi
+
+# The repository contains panel code only. Mutable state is overlaid from an
+# already integrated installation at runtime and never enters Git. The first
+# migration from the former standalone panel is intentionally performed as a
+# separate, one-time restore after the clean integrated installation.
+if [[ "$INSTALL_PANEL" != 'y' ]]; then
+	rm -rf /tmp/antizapret/setup/opt/AdminAntizapret
+	rm -f \
+		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret.service \
+		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-traffic-sync.service \
+		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-traffic-sync.timer
+elif [[ -f "$PANEL_INSTALL_DIR/.antizapret-integrated" ]]; then
+	PANEL_STATE_STAGING="$(mktemp -d /tmp/antizapret-panel-state.XXXXXX)"
+	for panel_state_path in .env instance data logs backups ips/runtime_backups; do
+		if [[ -e "$PANEL_INSTALL_DIR/$panel_state_path" ]]; then
+			mkdir -p "$(dirname "$PANEL_STATE_STAGING/$panel_state_path")"
+			cp -a "$PANEL_INSTALL_DIR/$panel_state_path" \
+				"$PANEL_STATE_STAGING/$panel_state_path"
+		fi
+	done
+	for panel_state_path in .env instance data logs backups ips/runtime_backups; do
+		if [[ -e "$PANEL_STATE_STAGING/$panel_state_path" ]]; then
+			mkdir -p "$(dirname "/tmp/antizapret/setup/opt/AdminAntizapret/$panel_state_path")"
+			rm -rf "/tmp/antizapret/setup/opt/AdminAntizapret/$panel_state_path"
+			cp -a "$PANEL_STATE_STAGING/$panel_state_path" \
+				"/tmp/antizapret/setup/opt/AdminAntizapret/$panel_state_path"
+		fi
+	done
 fi
 
 # Сохраняем пользовательские настройки и обработчики custom*.sh
@@ -2793,10 +3167,32 @@ echo 'nf_conntrack' > /etc/modules-load.d/nf_conntrack.conf
 
 # Копируем нужное, удаляем не нужное
 rm -rf /root/antizapret
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	rm -rf "$PANEL_INSTALL_DIR"
+fi
 cp -r /tmp/antizapret/setup/* /
 require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 rm -rf /tmp/dnslib
 rm -rf /tmp/antizapret
+if [[ -n "$PANEL_STATE_STAGING" ]]; then
+	rm -rf -- "$PANEL_STATE_STAGING"
+	PANEL_STATE_STAGING=
+fi
+
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	find "$PANEL_INSTALL_DIR/script_sh" -type f -name '*.sh' -exec chmod 755 {} +
+	python3 -m venv "$PANEL_INSTALL_DIR/venv"
+	"$PANEL_INSTALL_DIR/venv/bin/pip" install -q --upgrade pip setuptools wheel
+	"$PANEL_INSTALL_DIR/venv/bin/pip" install -q -r "$PANEL_INSTALL_DIR/requirements.txt"
+	configure_panel_environment
+	"$PANEL_INSTALL_DIR/venv/bin/python" "$PANEL_INSTALL_DIR/utils/init_db.py" --ensure-schema
+	if ! "$PANEL_INSTALL_DIR/venv/bin/python" "$PANEL_INSTALL_DIR/utils/init_db.py" --has-users; then
+		"$PANEL_INSTALL_DIR/venv/bin/python" "$PANEL_INSTALL_DIR/utils/init_db.py"
+	fi
+	chmod 600 "$PANEL_INSTALL_DIR/.env"
+	install -d -m 755 /root/AdminPanel
+	ln -sfn "$PANEL_INSTALL_DIR/script_sh/adminpanel.sh" "$PANEL_LEGACY_MANAGER"
+fi
 
 # Одноразовые источники уже опубликованы. Они входят в snapshot и вернутся
 # только при rollback; после успешного cutover устаревший backup не останется.
@@ -2912,6 +3308,9 @@ fi
 if [[ "$BGP_ENABLE" == 'y' ]]; then
 	systemctl enable antizapret-bgp
 fi
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	systemctl enable "$PANEL_SERVICE" "$PANEL_TRAFFIC_TIMER"
+fi
 
 # Firewall first. Public VPN listeners are started only after antizapret is up.
 systemctl start kresd@1.service kresd@2.service
@@ -2965,6 +3364,13 @@ if (( ${#CUTOVER_VPN_UNITS[@]} > 0 )); then
 	CUTOVER_UNITS+=("${CUTOVER_VPN_UNITS[@]}")
 fi
 
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	systemctl start "$PANEL_SERVICE" "$PANEL_TRAFFIC_TIMER"
+	wait_install_unit_active "$PANEL_SERVICE" || exit 23
+	wait_install_unit_active "$PANEL_TRAFFIC_TIMER" || exit 23
+	CUTOVER_UNITS+=("$PANEL_SERVICE" "$PANEL_TRAFFIC_TIMER")
+fi
+
 # custom-up штатно видит уже поднятые VPN-интерфейсы. State и lock
 # не дают потерять парный custom-down при падении основного unit.
 (
@@ -3012,6 +3418,9 @@ done
 # Units are active; now verify addresses, listeners, firewall and local DNS.
 # This is the last fatal gate before the transaction is committed.
 validate_cutover_runtime
+if [[ "$INSTALL_PANEL" == 'y' ]]; then
+	validate_panel_runtime
+fi
 
 # A guard left by a failed rollback is cleared only after the replacement
 # firewall and every requested tunnel passed the regular cutover checks.
