@@ -338,7 +338,7 @@ main_menu() {
         1) menu_service_panel ;;
         2) menu_administrators ;;
         3) menu_network_https ;;
-        4) menu_backups_updates ;;
+        4) menu_backups ;;
         5) menu_diagnostics ;;
         6) uninstall ;;
         7)

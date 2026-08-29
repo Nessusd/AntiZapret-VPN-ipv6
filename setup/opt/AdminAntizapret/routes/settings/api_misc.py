@@ -1,7 +1,4 @@
-"""Прочие settings-API эндпоинты: экспорт журналов, IP-файлы, мониторинг, тест TG.
-
-Вынесено из routes/settings/api.py. URL-пути и поведение сохранены 1:1.
-"""
+"""Settings API: экспорт журналов, мониторинг и проверка Telegram."""
 
 import csv
 import io
@@ -20,7 +17,6 @@ def register_settings_misc_api_routes(
     auth_manager,
     user_model,
     user_action_log_model,
-    ip_manager,
     set_env_value,
     get_env_value,
     log_user_action_event,
@@ -93,117 +89,6 @@ def register_settings_misc_api_routes(
                 "Content-Disposition": f'attachment; filename="{filename}"',
                 "Cache-Control": "no-store",
             },
-        )
-
-    @app.route("/api/antizapret/ip-files", methods=["GET", "POST"])
-    @auth_manager.admin_required
-    def api_antizapret_ip_files():
-        if request.method == "GET":
-            ip_manager.sync_enabled()
-            return jsonify(
-                {
-                    "success": True,
-                    "states": {k: bool(v) for k, v in ip_manager.get_file_states().items()},
-                    "source_states": {k: bool(v) for k, v in ip_manager.get_source_states().items()},
-                }
-            )
-
-        payload = request.get_json(silent=True) or {}
-        if not isinstance(payload, dict):
-            return jsonify({"success": False, "message": "Ожидается JSON-объект"}), 400
-
-        action = str(payload.get("action") or "").strip().lower()
-        if action == "sync_with_list":
-            ip_manager.sync_enabled()
-            sync_result = ip_manager.sync_enabled_from_list()
-            refreshed_states = {k: bool(v) for k, v in ip_manager.get_file_states().items()}
-
-            synced_files = int(sync_result.get("synced_files", 0))
-            updated_files = int(sync_result.get("updated_files", 0))
-            missing_sources = [str(item) for item in (sync_result.get("missing_sources") or [])]
-
-            details_parts = [f"synced={synced_files}", f"updated={updated_files}"]
-            if missing_sources:
-                details_parts.append(f"missing={','.join(missing_sources[:5])}")
-
-            log_user_action_event(
-                "settings_ip_files_sync",
-                target_type="ip_file",
-                target_name="all_enabled",
-                details=" ".join(details_parts),
-            )
-
-            if missing_sources:
-                message = (
-                    f"Сверка завершена: синхронизировано {synced_files}, обновлено {updated_files}. "
-                    f"Не найдены исходные файлы: {', '.join(missing_sources)}"
-                )
-            else:
-                message = (
-                    f"Сверка завершена: синхронизировано {synced_files}, обновлено {updated_files}."
-                )
-
-            return jsonify(
-                {
-                    "success": True,
-                    "message": message,
-                    "synced_files": synced_files,
-                    "updated_files": updated_files,
-                    "missing_sources": missing_sources,
-                    "states": refreshed_states,
-                }
-            )
-
-        states = payload.get("states")
-        if not isinstance(states, dict):
-            return jsonify({"success": False, "message": "Ожидается поле states в формате объекта"}), 400
-
-        ip_manager.sync_enabled()
-        all_ip_files_meta = ip_manager.list_ip_files()
-        available_files = set(all_ip_files_meta.keys())
-        current_states = {k: bool(v) for k, v in ip_manager.get_file_states().items()}
-
-        changes_count = 0
-        details = []
-
-        for ip_file, raw_state in states.items():
-            if ip_file not in available_files:
-                continue
-
-            desired_enabled = bool(raw_state)
-            current_enabled = bool(current_states.get(ip_file, False))
-            if desired_enabled == current_enabled:
-                continue
-
-            if desired_enabled:
-                affected_count = ip_manager.enable_file(ip_file)
-            else:
-                affected_count = ip_manager.disable_file(ip_file)
-
-            _meta = all_ip_files_meta.get(ip_file, {})
-            _display = (_meta.get("name") if isinstance(_meta, dict) else None) \
-                       or ip_file.replace(".txt", "").replace("-ips", "").replace("-", " ").title()
-
-            changes_count += 1
-            details.append(ip_file)
-
-            log_user_action_event(
-                "settings_ip_file_toggle",
-                target_type="ip_file",
-                target_name=ip_file,
-                details=f"{'вкл' if desired_enabled else 'выкл'}|{_display}|{affected_count} IP",
-            )
-
-        refreshed_states = {k: bool(v) for k, v in ip_manager.get_file_states().items()}
-
-        return jsonify(
-            {
-                "success": True,
-                "message": "Состояние IP-файлов сохранено" if changes_count else "Изменений в IP-файлах нет",
-                "changes": changes_count,
-                "states": refreshed_states,
-                "details": details,
-            }
         )
 
     @app.route("/api/monitor-settings", methods=["POST"])

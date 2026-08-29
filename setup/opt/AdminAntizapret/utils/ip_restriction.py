@@ -564,7 +564,7 @@ class IPRestriction:
 
     def clear_scanner_bans(self):
         with self._scanner_lock:
-            self._firewall_store.clear_all()
+            return self._firewall_store.clear_all()
 
     def add_ip(self, ip):
         """Добавляет IP"""
@@ -677,6 +677,7 @@ class IPRestriction:
             "active_bans": display["active_bans"],
             "grace_entries": display["grace_entries"],
             "has_firewall_entries": display["has_firewall_entries"],
+            "firewall_healthy": display["firewall_healthy"],
         }
 
 

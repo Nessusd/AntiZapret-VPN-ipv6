@@ -270,7 +270,7 @@ prepareWireGuardIPv6(){
 	else
 		WIREGUARD_IPV6_ROUTES=", $WIREGUARD_IPV6_NETWORK"
 		WIREGUARD_FAKE_IPV6_ARGS=(--prefix "$WIREGUARD_IPV6_PREFIX")
-		if [[ "${ALTERNATIVE_FAKE_IPV6:-n}" == 'y' ]]; then
+		if [[ "${ALTERNATIVE_FAKE_IPV6:-y}" == 'y' ]]; then
 			WIREGUARD_FAKE_IPV6_ARGS+=(--alternative-fake-ipv6)
 		fi
 		WIREGUARD_IPV6_ROUTES+=", $(python3 "$WIREGUARD_IPV6_HELPER" "${WIREGUARD_FAKE_IPV6_ARGS[@]}" fake-network)"

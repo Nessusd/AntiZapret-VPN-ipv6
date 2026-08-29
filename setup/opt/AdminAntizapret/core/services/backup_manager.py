@@ -1,18 +1,16 @@
 import glob
-import inspect
 import json
 import os
 import shutil
-import tarfile
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
 import subprocess
+import tarfile
+from datetime import datetime, timezone
 
 from core.services.db_backup_export import (
     BACKUP_EXCLUDED_TABLES,
     prepare_db_files_for_backup,
 )
+from core.services.restore_manager import RestoreJobService
 
 
 class BackupManagerService:
@@ -38,6 +36,11 @@ class BackupManagerService:
         self.backup_root = os.path.abspath(backup_root)
         self.service_name = service_name
         self.retention_count = max(1, int(retention_count or 5))
+        self.restore_jobs = RestoreJobService(
+            app_root=self.app_root,
+            backup_root=self.backup_root,
+            service_name=self.service_name,
+        )
 
     def default_components(self):
         return ["db", "env", "data"]
@@ -196,14 +199,19 @@ class BackupManagerService:
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
 
     def restore_backup(self, backup_name):
-        archive_path = self.resolve_backup_path(backup_name)
-        if not os.path.isfile(archive_path):
-            raise FileNotFoundError(f"Файл бэкапа не найден: {archive_path}")
+        return self.restore_jobs.run_synchronous(backup_name)
 
-        self._service_control("stop", allow_failure=True)
-        self._safe_extract_archive_to_root(archive_path)
-        self._service_control("start", allow_failure=True)
-        return {"archive_path": archive_path, "message": "Восстановление завершено"}
+    def queue_restore(self, backup_name):
+        return self.restore_jobs.queue(backup_name)
+
+    def run_restore_job(self, job_id):
+        return self.restore_jobs.run_job(job_id)
+
+    def read_restore_status(self, job_id):
+        return self.restore_jobs.read_status(job_id)
+
+    def read_restore_status_with_token(self, job_id, status_token):
+        return self.restore_jobs.read_status_with_token(job_id, status_token)
 
     def delete_backup(self, backup_name):
         archive_path = self.resolve_backup_path(backup_name)
@@ -278,7 +286,7 @@ class BackupManagerService:
 
     def prune_old_backups(self):
         archive_paths = sorted(
-            glob.glob(os.path.join(self.backup_root, "*.tar.gz")),
+            glob.glob(os.path.join(self.backup_root, "full_backup_*.tar.gz")),
             key=lambda p: os.path.getmtime(p),
             reverse=True,
         )
@@ -330,7 +338,9 @@ class BackupManagerService:
         for key in self._DATA_ENV_KEYS:
             raw = (env_map.get(key) or os.getenv(key) or "").strip()
             if raw:
-                result.append(raw)
+                result.append(
+                    raw if os.path.isabs(raw) else os.path.join(self.app_root, raw)
+                )
         return result
 
     def _collect_component_files(self, components):
@@ -407,69 +417,6 @@ class BackupManagerService:
                 ]
             ),
         }
-
-    def _validate_archive_member(self, member):
-        """Отклоняем потенциально опасные member'ы до распаковки.
-
-        Запрещаем symlink/hardlink, device/char/fifo-файлы, абсолютные пути
-        и пути с '..' — чтобы распаковка не могла выйти за staging или
-        перезаписать произвольные файлы через ссылки.
-        """
-        member_name = member.name or ""
-        if not member_name:
-            raise RuntimeError("Бэкап содержит member без имени")
-        if member.issym() or member.islnk():
-            raise RuntimeError("Бэкап содержит ссылки (symlink/hardlink) — отклонено")
-        if member.isdev() or member.ischr() or member.isblk() or member.isfifo():
-            raise RuntimeError("Бэкап содержит device/fifo-файлы — отклонено")
-        if member_name.startswith("/") or ".." in Path(member_name).parts:
-            raise RuntimeError("Бэкап содержит недопустимые пути")
-        # Дополнительная защита: имя не должно резолвиться за пределы корня.
-        target_path = os.path.abspath(os.path.join("/", member_name))
-        if os.path.commonpath([target_path, "/"]) != "/":
-            raise RuntimeError("Бэкап содержит путь вне корня")
-        return target_path
-
-    def _safe_extract_archive_to_root(self, archive_path):
-        """Безопасное восстановление: распаковка в staging, затем копирование.
-
-        Вместо tar.extractall(path="/") сначала проверяем все member'ы,
-        распаковываем только обычные файлы/каталоги во временный staging,
-        а затем контролируемо копируем их на штатные места. Staging чистится
-        в finally.
-        """
-        staging_dir = tempfile.mkdtemp(prefix="az-restore-", dir="/var/tmp")
-        try:
-            with tarfile.open(archive_path, "r:gz") as tar:
-                safe_members = []
-                for member in tar.getmembers():
-                    self._validate_archive_member(member)
-                    if member.isfile() or member.isdir():
-                        safe_members.append(member)
-                    else:
-                        raise RuntimeError(
-                            f"Бэкап содержит неподдерживаемый тип записи: {member.name}"
-                        )
-                # Member'ы уже проверены вручную. На версиях Python, где
-                # extractall поддерживает стандартный фильтр data, применяем
-                # его дополнительно как defense-in-depth.
-                extract_kwargs = {"path": staging_dir, "members": safe_members}
-                if "filter" in inspect.signature(tar.extractall).parameters:
-                    extract_kwargs["filter"] = "data"
-                tar.extractall(**extract_kwargs)
-
-                for member in safe_members:
-                    if not member.isfile():
-                        continue
-                    relative_name = member.name.lstrip("/")
-                    source_path = os.path.join(staging_dir, relative_name)
-                    target_path = os.path.abspath(os.path.join("/", relative_name))
-                    if os.path.commonpath([target_path, "/"]) != "/":
-                        raise RuntimeError("Бэкап содержит путь вне корня")
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    shutil.copy2(source_path, target_path)
-        finally:
-            shutil.rmtree(staging_dir, ignore_errors=True)
 
     def _service_control(self, action, *, allow_failure):
         cmd = ["systemctl", action, self.service_name]

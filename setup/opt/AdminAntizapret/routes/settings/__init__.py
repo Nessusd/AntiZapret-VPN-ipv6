@@ -60,24 +60,11 @@ def register_settings_routes(app, **deps):
     register_settings_api_routes(
         app,
         auth_manager=deps["auth_manager"],
-        db=deps["db"],
         user_model=deps["user_model"],
         user_action_log_model=deps["user_action_log_model"],
-        ip_manager=deps["ip_manager"],
-        enqueue_background_task=deps["enqueue_background_task"],
-        task_restart_service=deps["task_restart_service"],
         set_env_value=deps["set_env_value"],
         get_env_value=deps["get_env_value"],
-        to_bool=deps["to_bool"],
-        is_valid_cron_expression=deps["is_valid_cron_expression"],
-        ensure_nightly_idle_restart_cron=deps["ensure_nightly_idle_restart_cron"],
-        get_nightly_idle_restart_settings=deps["get_nightly_idle_restart_settings"],
-        set_nightly_idle_restart_settings=deps["set_nightly_idle_restart_settings"],
-        get_active_web_session_settings=deps["get_active_web_session_settings"],
-        set_active_web_session_settings=deps["set_active_web_session_settings"],
-        log_telegram_audit_event=deps["log_telegram_audit_event"],
         log_user_action_event=deps["log_user_action_event"],
-        cidr_db_updater_service=deps["cidr_db_updater_service"],
     )
     register_settings_antizapret_routes(app, auth_manager=deps["auth_manager"])
 

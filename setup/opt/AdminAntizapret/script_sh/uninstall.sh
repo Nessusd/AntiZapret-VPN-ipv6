@@ -15,9 +15,30 @@ uninstall() {
         return
     }
 
-    create_backup
+    local use_selfsigned=false use_letsencrypt=false use_nginx=false restore_unit
+    local -a restore_units=()
 
-    local use_selfsigned=false use_letsencrypt=false use_nginx=false
+    mapfile -t restore_units < <(
+        systemctl list-units --all --plain --no-legend 'admin-antizapret-restore@*.service' 2>/dev/null |
+            awk '{print $1}'
+    )
+    if [ "${#restore_units[@]}" -gt 0 ]; then
+        ui_info "Остановка активного восстановления перед резервным копированием..."
+        if ! systemctl stop "${restore_units[@]}"; then
+            ui_fail "Не удалось безопасно остановить восстановление панели"
+            press_any_key
+            return 1
+        fi
+        for restore_unit in "${restore_units[@]}"; do
+            if systemctl is-active --quiet "$restore_unit"; then
+                ui_fail "Задача восстановления всё ещё активна: $restore_unit"
+                press_any_key
+                return 1
+            fi
+        done
+    fi
+
+    create_backup
 
     if [ -f "$INSTALL_DIR/.env" ]; then
         if grep -q "USE_HTTPS=true" "$INSTALL_DIR/.env" 2>/dev/null; then
@@ -42,9 +63,15 @@ uninstall() {
     systemctl disable "admin-antizapret-traffic-sync.service" 2>/dev/null || true
     rm -f "/etc/systemd/system/admin-antizapret-traffic-sync.timer"
     rm -f "/etc/systemd/system/admin-antizapret-traffic-sync.service"
+    rm -f "/etc/systemd/system/admin-antizapret-restore@.service"
     systemctl stop    "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     rm -f "/etc/systemd/system/$SERVICE_NAME.service"
+    rm -rf "/var/lib/admin-antizapret"
+    rm -f /run/admin-antizapret-restore.lock
+    rm -f "/etc/letsencrypt/renewal-hooks/deploy/admin-antizapret-nginx"
+    rm -f /run/admin-antizapret-certbot-redirect.state \
+        /run/admin-antizapret-certbot-redirect.lock
     systemctl daemon-reload
     ui_ok "Сервисы остановлены"
 
@@ -58,15 +85,37 @@ uninstall() {
     if [ "$use_letsencrypt" = true ]; then
         local DOMAIN
         DOMAIN=$(grep "^DOMAIN=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '" ' || printf '')
+		if [ -n "$DOMAIN" ] && ! [[ "$DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+			ui_warn "Некорректный домен в .env; сертификат и Nginx-конфигурация оставлены без изменений"
+			DOMAIN=
+		fi
 
         ui_warn "Обнаружены сертификаты Let's Encrypt для домена: $DOMAIN"
         if ui_confirm "Удалить сертификат и конфиг Nginx (если есть)?"; then
             if [ "$use_nginx" = true ] && [ -n "$DOMAIN" ]; then
                 local conf="${DOMAIN//./_}"
+                local nginx_config="/etc/nginx/sites-available/$conf"
+                local nginx_enabled="/etc/nginx/sites-enabled/$conf"
+                local nginx_owned=false
+                if grep -Fxq '# Managed by AntiZapret integrated installer' "$nginx_config" 2>/dev/null; then
+                    nginx_owned=true
+                elif [ -f "$nginx_config" ] && [ ! -L "$nginx_config" ] && \
+                     [ -L "$nginx_enabled" ] && \
+                     [ "$(readlink -f "$nginx_enabled")" = "$(readlink -f "$nginx_config")" ] && \
+                     grep -Fq "server_name $DOMAIN;" "$nginx_config" && \
+                     grep -Fq "ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;" "$nginx_config" && \
+					 grep -Fq "ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;" "$nginx_config" && \
+                     grep -Eq '^[[:space:]]*proxy_pass http://127\.0\.0\.1:[0-9]+;[[:space:]]*$' "$nginx_config"
+                then
+                    nginx_owned=true
+                fi
                 ui_info "Удаление конфигурации Nginx..."
-                rm -f "/etc/nginx/sites-available/$conf"
-                rm -f "/etc/nginx/sites-enabled/$conf"
-                nginx -t && systemctl reload nginx 2>/dev/null || ui_warn "Nginx не перезагружен"
+                if [ "$nginx_owned" = true ]; then
+                    rm -f "$nginx_config" "$nginx_enabled"
+                    nginx -t && systemctl reload nginx 2>/dev/null || ui_warn "Nginx не перезагружен"
+                else
+                    ui_warn "Конфигурация Nginx не принадлежит AdminAntizapret и оставлена без изменений"
+                fi
             fi
             if [ -n "$DOMAIN" ] && command -v certbot >/dev/null 2>&1; then
                 ui_info "Удаление сертификата Let's Encrypt..."
@@ -74,10 +123,14 @@ uninstall() {
                     ui_warn "Сертификат $DOMAIN не найден или уже удалён"
             fi
             crontab -l 2>/dev/null | grep -v 'renew_cert.sh' | crontab - 2>/dev/null || true
-            systemctl disable --now certbot.timer 2>/dev/null || true
             ui_ok "Сертификат и связанные файлы удалены"
         else
             ui_ok "Удаление сертификата отменено"
+        fi
+
+        local renewal_config="/etc/letsencrypt/renewal/${DOMAIN}.conf"
+		if [ -n "$DOMAIN" ] && [ -f "$renewal_config" ] && [ ! -L "$renewal_config" ]; then
+            sed -i "\\|$INSTALL_DIR/script_sh/certbot_standalone_|d" "$renewal_config"
         fi
     fi
 

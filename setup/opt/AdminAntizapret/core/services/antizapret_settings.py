@@ -23,3 +23,11 @@ def read_antizapret_settings(path=ANTIZAPRET_SETUP_FILE):
             m = re.search(rf"^{re.escape(env)}=([yn])$", content, re.M | re.I)
             settings[key] = m.group(1).lower() if m else default
     return settings
+
+
+def is_antizapret_ipv6_enabled(settings=None):
+    """Возвращает положительное состояние IPv6 из конфигурации AntiZapret."""
+    current_settings = (
+        settings if settings is not None else read_antizapret_settings()
+    )
+    return str(current_settings.get("disable_ipv6", "n")).strip().lower() != "y"

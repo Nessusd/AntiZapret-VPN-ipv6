@@ -156,20 +156,22 @@ def handle_security_settings(form, *, flash, ip_restriction, log_user_action_eve
                 )
 
     elif ip_action == "clear_scanner_bans":
-        ip_restriction.clear_scanner_bans()
-        flash("Все баны сканеров сброшены (файл и iptables)", "success")
-        log_user_action_event(
-            "settings_ip_scanner_bans_clear",
-            target_type="ip_restriction",
-            target_name="scanner_bans",
-        )
+        if ip_restriction.clear_scanner_bans():
+            flash("Все баны сканеров сброшены (IPv4 и IPv6)", "success")
+            log_user_action_event(
+                "settings_ip_scanner_bans_clear",
+                target_type="ip_restriction",
+                target_name="scanner_bans",
+            )
+        else:
+            flash("Не удалось полностью очистить серверные firewall-баны", "error")
 
     elif ip_action == "unban_scanner_ip":
         ip_to_unban = form.get("ip_to_unban", "").strip()
         if ip_to_unban:
             if ip_restriction.unban_scanner_ip(ip_to_unban):
                 flash(
-                    f"IP {ip_to_unban} разблокирован на сервере (iptables). "
+                    f"IP {ip_to_unban} разблокирован на сервере (IPv4/IPv6 firewall). "
                     f"Повторный серверный бан отложен — можно тестировать без whitelist.",
                     "success",
                 )
@@ -179,7 +181,10 @@ def handle_security_settings(form, *, flash, ip_restriction, log_user_action_eve
                     target_name=ip_to_unban,
                 )
             else:
-                flash("Некорректный IP для разблокировки", "error")
+                flash(
+                    "Не удалось разблокировать IP: проверьте адрес и состояние firewall",
+                    "error",
+                )
         else:
             flash("Укажите IP для разблокировки", "error")
 

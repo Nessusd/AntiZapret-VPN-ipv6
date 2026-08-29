@@ -363,7 +363,8 @@ def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
         if ipv6_enabled:
             network6.add(
                 fake_ipv6_network(
-                    vpn_prefix(config), yes_no(config, "ALTERNATIVE_FAKE_IPV6")
+                    vpn_prefix(config),
+                    yes_no(config, "ALTERNATIVE_FAKE_IPV6", "y"),
                 )
             )
         if len(ordered(network4)) > MAX_PREFIXES or len(ordered(network6)) > MAX_PREFIXES:

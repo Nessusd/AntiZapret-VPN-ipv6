@@ -64,8 +64,8 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 	echo 'IPs...'
 
 	# Обрабатываем конфигурационные файлы
-	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*exclude-ips.txt | sort -u > temp/exclude-ips.txt
-	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' download/*ips.txt config/*include-ips.txt | sort -u > temp/include-ips.txt
+	sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*exclude-ips.txt | sort -u > temp/exclude-ips.txt
+	sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' download/*ips.txt config/*include-ips.txt | sort -u > temp/include-ips.txt
 
 	# Убираем IPv4-адреса из исключений
 	comm -13 temp/exclude-ips.txt temp/include-ips.txt > temp/route-ips.txt
@@ -77,7 +77,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 	echo "$(wc -l < result/route-ips.txt) - route-ips.txt"
 
 	# Обрабатываем список запрещенных сетей для форвардинга
-	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*drop-ips.txt | sort -u \
+	sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*drop-ips.txt | sort -u \
 	| awk -F'[/.]' 'NF==5 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 && $5>=1 && $5<=32 {print}' > result/drop-ips.txt
 
 	# Выводим результат
@@ -93,7 +93,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 	} | ipset restore
 
 	# Обрабатываем список IP-источников, которым запрещены входящие подключения к серверу (INPUT)
-	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*deny-ips.txt | sort -u \
+	sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*deny-ips.txt | sort -u \
 	| awk -F'[/.]' 'NF==5 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 && $5>=1 && $5<=32 {print}' > result/deny-ips.txt
 
 	# Выводим результат
@@ -142,7 +142,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 
 	if [[ "$RESTRICT_FORWARD" == 'y' ]]; then
 		# Обрабатываем конфигурационные файлы
-		sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*forward-ips.txt temp/route-ips.txt | sort -u \
+		sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*forward-ips.txt temp/route-ips.txt | sort -u \
 		| awk -F'[/.]' 'NF==5 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 && $5>=1 && $5<=32 {print}' > result/forward-ips.txt
 
 		# Выводим результат
@@ -160,7 +160,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 
 	if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 		# Обрабатываем конфигурационные файлы
-		sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*allow-ips.txt | sort -u \
+		sed -E 's/#.*$//; s/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d' config/*allow-ips.txt | sort -u \
 		| awk -F'[/.]' 'NF==5 && $1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255 && $5>=1 && $5<=32 {print}' > result/allow-ips.txt
 
 		# Выводим результат

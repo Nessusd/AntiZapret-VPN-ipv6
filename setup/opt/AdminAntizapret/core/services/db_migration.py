@@ -4,7 +4,6 @@ import logging
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -13,7 +12,7 @@ class DatabaseMigrationService:
         self.app = app
         self.db = db
 
-    def run_db_migrations(self):
+    def run_db_migrations(self, *, strict=False):
         """Apply incremental DB schema migrations."""
         with self.app.app_context():
             self.db.create_all()
@@ -432,3 +431,5 @@ class DatabaseMigrationService:
                         conn.commit()
             except Exception as exc:
                 logger.warning("DB migration warning: %s", exc, exc_info=True)
+                if strict:
+                    raise

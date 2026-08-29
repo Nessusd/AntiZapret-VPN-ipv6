@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
+from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -13,6 +15,24 @@ if ROOT not in sys.path:
 
 from core.services.backup_manager import BackupManagerService  # noqa: E402
 from core.services.backup_telegram_job import env_value, load_env_map  # noqa: E402
+
+
+@contextmanager
+def _restore_interrupt_guard():
+    previous_handlers = {}
+
+    def _interrupt(signum, _frame):
+        raise RuntimeError(
+            f"Восстановление прервано сигналом {signal.Signals(signum).name}"
+        )
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[signum] = signal.signal(signum, _interrupt)
+    try:
+        yield
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def _default_install_dir() -> str:
@@ -62,7 +82,20 @@ def cmd_create(args: argparse.Namespace) -> int:
 def cmd_restore(args: argparse.Namespace) -> int:
     service = _build_service(args.install_dir)
     try:
-        result = service.restore_backup(args.backup_name)
+        with _restore_interrupt_guard():
+            result = service.restore_backup(args.backup_name)
+        print(result.get("archive_path", ""))
+        return 0
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_run_restore_job(args: argparse.Namespace) -> int:
+    service = _build_service(args.install_dir)
+    try:
+        with _restore_interrupt_guard():
+            result = service.run_restore_job(args.job_id)
         print(result.get("archive_path", ""))
         return 0
     except Exception as exc:
@@ -71,7 +104,9 @@ def cmd_restore(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Резервное копирование панели AdminAntizapret")
+    parser = argparse.ArgumentParser(
+        description="Резервное копирование панели AdminAntizapret"
+    )
     parser.add_argument(
         "--install-dir",
         default=_default_install_dir(),
@@ -98,6 +133,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Имя файла или абсолютный путь к архиву .tar.gz",
     )
     restore_parser.set_defaults(func=cmd_restore)
+
+    restore_job_parser = subparsers.add_parser(
+        "run-restore-job",
+        help="Выполнить подготовленную задачу восстановления (для systemd)",
+    )
+    restore_job_parser.add_argument(
+        "job_id", help="Идентификатор задачи восстановления"
+    )
+    restore_job_parser.set_defaults(func=cmd_run_restore_job)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

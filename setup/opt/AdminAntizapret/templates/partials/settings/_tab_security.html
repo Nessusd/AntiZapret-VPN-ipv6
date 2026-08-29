@@ -201,7 +201,8 @@
               <div>
                 <h3>Блокировка сканеров</h3>
                 <p class="security-card-head__desc">
-                  Серверный бан (iptables/ipset{% if ip_scanner_firewall_enabled %}, включён{% else %}, выключен{% endif %}).
+                  Серверный бан (IPv4: iptables, IPv6: ip6tables, хранение: ipset;
+                  {% if not ip_scanner_firewall_enabled %}выключен{% elif ip_scanner_firewall_healthy %}активен{% else %}ошибка серверного firewall{% endif %}).
                   Счётчик попыток — только при «Жёстко отклонять сканеры».
                   После «Разблокировать» — пауза {{ grace_pause_min }}&nbsp;мин без повторного бана.
                   {{ ip_scanner_strikes_for_year }} срабатываний → {{ year_ban_days }}&nbsp;дн.
@@ -353,7 +354,7 @@
 
             {% if ip_scanner_active_bans %}
             <div class="security-ban-panel">
-              <h4 class="security-ban-panel__title">Активные баны (iptables)</h4>
+              <h4 class="security-ban-panel__title">Активные серверные баны</h4>
               <div class="ip-list security-scanner-ban-list">
                 <table class="ip-table security-ban-table">
                   <thead>
@@ -361,6 +362,7 @@
                       <th>IP</th>
                       <th>Срабатывания</th>
                       <th>Тип</th>
+                      <th>Firewall</th>
                       <th>Осталось</th>
                       <th>Действие</th>
                     </tr>
@@ -375,6 +377,13 @@
                         <span class="badge subnet">1 год</span>
                         {% else %}
                         <span class="badge single">Временный</span>
+                        {% endif %}
+                      </td>
+                      <td>
+                        {% if ban.firewall_applied %}
+                        <span class="badge single">Применён</span>
+                        {% else %}
+                        <span class="badge subnet">Ошибка</span>
                         {% endif %}
                       </td>
                       <td><span class="security-ban-remaining">{{ ban.remaining_seconds }} сек</span></td>

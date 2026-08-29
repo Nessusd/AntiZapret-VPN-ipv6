@@ -260,16 +260,11 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
         key="routing",
         env_key="FEATURE_ROUTING_ENABLED",
         label="Маршрутизация",
-        description=(
-            "Раздел «Маршрутизация»: фильтры antizapret, CIDR-списки, пресеты и antifilter."
-        ),
+        description="Раздел «Маршрутизация»: параметры фильтров и сервисов AntiZapret.",
         icon="🗺️",
-        disable_hint="Раздел «Маршрутизация» и все связанные API CIDR/antifilter будут недоступны.",
+        disable_hint="Раздел «Маршрутизация» и API настроек AntiZapret будут недоступны.",
         resource_impact_level="minimal",
-        resource_savings=(
-            "Фоновой нагрузки нет; при работе с CIDR — загрузка/обновление списков, SQLite, "
-            "возможны сетевые запросы к провайдерам. Отключение убирает тяжёлые операции маршрутизации."
-        ),
+        resource_savings="Фоновой нагрузки нет; настройки читаются только при открытии раздела.",
         default=True,
         group="app_module",
         endpoints=(
@@ -277,21 +272,6 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
             "get_antizapret_settings",
             "update_antizapret_settings",
             "antizapret_settings_schema",
-            "api_cidr_lists",
-            "api_cidr_task_status",
-            "api_cidr_db_status",
-            "api_cidr_db_refresh",
-            "api_cidr_db_clear",
-            "api_cidr_db_generate",
-            "api_cidr_presets_list",
-            "api_cidr_presets_create",
-            "api_cidr_presets_update",
-            "api_cidr_presets_delete",
-            "api_cidr_presets_reset",
-            "api_cidr_providers_meta",
-            "api_antifilter_status",
-            "api_antifilter_refresh",
-            "api_antizapret_ip_files",
         ),
     ),
     FeatureToggleDefinition(

@@ -1,0 +1,17 @@
+[Unit]
+Description=Restore AdminAntizapret runtime data (job %i)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/AdminAntizapret
+ExecStart=/opt/AdminAntizapret/venv/bin/python3 /opt/AdminAntizapret/script_sh/backup_cli.py run-restore-job %i
+TimeoutStartSec=2h
+TimeoutStopSec=15min
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

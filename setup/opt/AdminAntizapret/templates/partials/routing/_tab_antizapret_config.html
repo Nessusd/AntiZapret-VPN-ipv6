@@ -6,40 +6,40 @@
       <section class="settings-group" data-antizapret-group="ipv6">
         <div class="settings-group__head">
           <h3>IPv6 AntiZapret</h3>
-          <span class="section-micro-status state-idle">управляется установщиком</span>
+          <span class="section-micro-status {% if antizapret_ipv6_enabled %}state-applied{% else %}state-disabled{% endif %}">
+            IPv6 {% if antizapret_ipv6_enabled %}включён{% else %}отключён{% endif %}
+          </span>
         </div>
         <p class="config-description">
           Эти общие параметры читаются из <code>/root/antizapret/setup</code>. Для их изменения запустите единый
-          <code>setup.sh</code> проекта.
+          <code>setup.sh</code> проекта. Все IP-списки в редакторе используют одни и те же файлы для IPv4 и IPv6;
+          отдельные IPv6-файлы не нужны:
+          <a href="{{ url_for('edit_files') }}#form-include_ips">редактировать общие IP-списки</a>.
         </p>
         <div class="config-grid">
           <div class="config-item az-item">
-            <label class="toggle-wrapper">
-              <span class="toggle-label"><span class="config-item-title">Отключить IPv6 <span class="tag-az">AZ</span></span></span>
-              <div class="toggle-switch">
-                <input type="checkbox" id="disable-ipv6-toggle" class="toggle-input" disabled
-                  {% if antizapret_settings.disable_ipv6 == 'y' %}checked{% endif %} />
-                <span class="toggle-slider"></span>
-              </div>
-            </label>
-            <div class="config-item-tooltip"><span class="config-param">(DISABLE_IPV6)</span> Глобальное состояние IPv6.</div>
+            <div class="toggle-wrapper">
+              <span class="toggle-label"><span class="config-item-title">IPv6 <span class="tag-az">AZ</span></span></span>
+              <span class="section-micro-status {% if antizapret_ipv6_enabled %}state-applied{% else %}state-disabled{% endif %}">
+                {% if antizapret_ipv6_enabled %}Включён{% else %}Отключён{% endif %}
+              </span>
+            </div>
+            <div class="config-item-tooltip"><span class="config-param">(DISABLE_IPV6={{ 'n' if antizapret_ipv6_enabled else 'y' }})</span> Глобальное состояние IPv6.</div>
           </div>
           <div class="config-item az-item">
             <div class="settings-form">
-              <label for="vpn-ipv6-prefix-input">VPN IPv6 prefix</label>
-              <input type="text" id="vpn-ipv6-prefix-input" value="{{ antizapret_settings.vpn_ipv6_prefix }}" disabled />
+              <span class="config-item-title">VPN IPv6 prefix</span>
+              <code>{{ antizapret_settings.vpn_ipv6_prefix }}</code>
             </div>
             <div class="config-item-tooltip"><span class="config-param">(VPN_IPV6_PREFIX)</span> Канонический ULA-префикс VPN /48.</div>
           </div>
           <div class="config-item az-item">
-            <label class="toggle-wrapper">
-              <span class="toggle-label"><span class="config-item-title">Альтернативный Fake IPv6 <span class="tag-az">benchmarking</span></span></span>
-              <div class="toggle-switch">
-                <input type="checkbox" id="alternative-fake-ipv6-toggle" class="toggle-input" disabled
-                  {% if antizapret_settings.alternative_fake_ipv6 == 'y' %}checked{% endif %} />
-                <span class="toggle-slider"></span>
-              </div>
-            </label>
+            <div class="toggle-wrapper">
+              <span class="toggle-label"><span class="config-item-title">Альтернативный Fake IPv6 <span class="tag-az">AZ</span></span></span>
+              <span class="section-micro-status {% if antizapret_settings.alternative_fake_ipv6 == 'y' %}state-applied{% else %}state-disabled{% endif %}">
+                {% if antizapret_settings.alternative_fake_ipv6 == 'y' %}Используется{% else %}Не используется{% endif %}
+              </span>
+            </div>
             <div class="config-item-tooltip"><span class="config-param">(ALTERNATIVE_FAKE_IPV6)</span> Диапазон Fake-IP 2001:2::/48.</div>
           </div>
         </div>
@@ -176,51 +176,6 @@
           </div>
         </div>
 
-        <p class="config-description">Дополнительные IP-диапазоны крупных CDN и облачных провайдеров</p>
-        {% if ip_files %}
-        <div class="config-grid">
-          {% for filename, file_info in ip_files.items() %}
-          {% set has_source = ip_source_states.get(filename, false) %}
-          <div class="config-item az-item{% if not has_source %} ip-file-item--no-source{% endif %}">
-            <div class="settings-form" data-ip-file-row="{{ filename }}">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">{{ file_info.name }}</span>
-                  {% if not has_source %}
-                  <span class="ip-file-no-source-badge">Не сформирован</span>
-                  {% endif %}
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" class="toggle-input ip-file-toggle" data-ip-file="{{ filename }}"
-                    data-ip-file-name="{{ file_info.name }}"
-                    data-source-exists="{{ 'true' if has_source else 'false' }}"
-                    {% if ip_file_states[filename] %}checked{% endif %}
-                    {% if not has_source %}disabled{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              {% if not has_source %}
-              <div class="ip-file-no-source-hint">
-                Данные не загружены в CIDR БД. Выберите провайдера во вкладке
-                <a href="#cidr-update" class="ip-file-go-cidr-link" data-go-tab="cidr-update">Обновление IP-списков</a>
-                и нажмите «Обновить из интернета».
-              </div>
-              {% endif %}
-            </div>
-            <div class="config-item-tooltip">
-              <span class="config-param">({{ filename }})</span> {{ file_info.description }}
-            </div>
-          </div>
-          {% endfor %}
-        </div>
-        <div class="ip-files-actions">
-          <button id="ip-files-sync-btn" type="button" class="button ip-files-sync-btn">
-            Сверить файлы из списка и синхронизировать
-          </button>
-        </div>
-        {% else %}
-        <p class="no-data">Нет доступных файлов</p>
-        {% endif %}
       </section>
 
       <section class="settings-group" data-antizapret-group="experimental">

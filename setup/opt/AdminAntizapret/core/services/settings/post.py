@@ -76,8 +76,6 @@ def process_settings_post(form, *, session, flash, redirect_url, **deps):
     handle_backup_restore(
         form,
         flash=flash,
-        session=session,
-        enqueue_background_task=deps["enqueue_background_task"],
         backup_manager_service=deps["backup_manager_service"],
         log_user_action_event=deps["log_user_action_event"],
     )

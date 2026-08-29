@@ -168,6 +168,7 @@ def build_settings_page_context(
         "ip_scanner_year_ban_seconds": scanner_settings["year_ban_seconds"],
         "ip_scanner_unban_grace_seconds": scanner_settings["unban_grace_seconds"],
         "ip_scanner_firewall_enabled": scanner_settings["firewall_enabled"],
+        "ip_scanner_firewall_healthy": scanner_settings["firewall_healthy"],
         "all_openvpn": all_openvpn,
         "openvpn_access_groups": openvpn_access_groups,
         "all_wg": all_wg,

@@ -373,7 +373,11 @@ navItems.forEach(btn => {
     });
 });
 
-const defaultNavItem = navItems.find((btn) => btn.classList.contains('active')) || navItems[0];
+const requestedFormId = (window.location.hash || '').replace(/^#/, '');
+const requestedNavItem = navItems.find((btn) => `form-${btn.dataset.file}` === requestedFormId);
+const defaultNavItem = requestedNavItem
+    || navItems.find((btn) => btn.classList.contains('active'))
+    || navItems[0];
 if (defaultNavItem) {
     selectNav(defaultNavItem);
 }

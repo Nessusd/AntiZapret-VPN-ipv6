@@ -72,6 +72,13 @@ PANEL_TRAFFIC_TIMER=admin-antizapret-traffic-sync.timer
 PANEL_CRONTAB_PATH=/var/spool/cron/crontabs/root
 PANEL_LEGACY_MANAGER=/root/AdminPanel/adminpanel.sh
 PANEL_STATE_STAGING=
+PANEL_PREVIOUS_DOMAIN=
+PANEL_NGINX_OWNER_MARKER='# Managed by AntiZapret integrated installer'
+PANEL_ACME_WEBROOT=/var/lib/admin-antizapret/acme
+PANEL_NGINX_RENEWAL_HOOK=/etc/letsencrypt/renewal-hooks/deploy/admin-antizapret-nginx
+PANEL_PREVIOUS_NGINX_SITE_REMOVED=n
+PANEL_RESTORE_LOCK=/run/admin-antizapret-restore.lock
+PANEL_RESTORE_LOCK_FD=
 INSTALL_TRANSACTION_PATHS=(
 	/root/easyrsa3
 	/root/wireguard
@@ -214,8 +221,67 @@ declare -A INSTALL_TRANSACTION_ENABLED=()
 declare -A INSTALL_TRANSACTION_SYSCTL=()
 declare -A INSTALL_ROLLBACK_CURRENT_ACTIVE=()
 
+panel_domain_is_valid() {
+	local domain=$1 label tld
+	local -a labels=()
+
+	(( ${#domain} <= 253 )) || return 1
+	[[ "$domain" == *.* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+	[[ "$domain" != .* && "$domain" != *. && "$domain" != *..* ]] || return 1
+	IFS=. read -r -a labels <<< "$domain"
+	(( ${#labels[@]} >= 2 )) || return 1
+	for label in "${labels[@]}"; do
+		[[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || return 1
+	done
+	tld=${labels[${#labels[@]}-1]}
+	[[ "$tld" =~ ^[A-Za-z]{2,63}$ ]]
+}
+
+panel_nginx_site_is_owned() {
+	local domain=$1 config_name config_file enabled_file
+	panel_domain_is_valid "$domain" || return 1
+	config_name="${domain//./_}"
+	config_file="/etc/nginx/sites-available/$config_name"
+	enabled_file="/etc/nginx/sites-enabled/$config_name"
+	[[ -f "$config_file" ]] || return 1
+	[[ ! -L "$config_file" ]] || return 1
+	grep -Fxq "$PANEL_NGINX_OWNER_MARKER" "$config_file" && return 0
+
+	# Конфигурации, созданные предыдущей версией интегрированного установщика,
+	# ещё не имели маркера. Узнаём только её полный набор привязок к панели.
+	[[ -L "$enabled_file" ]] || return 1
+	[[ "$(readlink -f "$enabled_file")" == "$(readlink -f "$config_file")" ]] || return 1
+	grep -Fq "server_name $domain;" "$config_file" &&
+		grep -Fq "ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;" "$config_file" &&
+		grep -Fq "ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;" "$config_file" &&
+		grep -Eq '^[[:space:]]*proxy_pass http://127\.0\.0\.1:[0-9]+;[[:space:]]*$' "$config_file"
+}
+
+require_panel_nginx_site_writable() {
+	local config_name="${PANEL_DOMAIN//./_}"
+	local config_file="/etc/nginx/sites-available/$config_name"
+	local enabled_file="/etc/nginx/sites-enabled/$config_name"
+
+	if [[ ! -e "$config_file" && ! -L "$config_file" && ! -e "$enabled_file" && ! -L "$enabled_file" ]]; then
+		return 0
+	fi
+	if [[ -e "$enabled_file" || -L "$enabled_file" ]]; then
+		if [[ ! -L "$enabled_file" ]] ||
+			[[ "$(readlink -f "$enabled_file")" != "$(readlink -f "$config_file")" ]]
+		then
+			echo "Error: Refusing to replace an unrelated enabled Nginx site: $enabled_file"
+			return 1
+		fi
+	fi
+	if panel_nginx_site_is_owned "$PANEL_DOMAIN"; then
+		return 0
+	fi
+	echo "Error: Refusing to replace an Nginx site not owned by AdminAntizapret: $config_file"
+	return 1
+}
+
 configure_panel_transaction_scope() {
-	local unit
+	local manage_nginx=n previous_config_name previous_config_file previous_renewal_config unit
 	local -a panel_units=(
 		"$PANEL_SERVICE"
 		"$PANEL_TRAFFIC_SERVICE"
@@ -231,8 +297,10 @@ configure_panel_transaction_scope() {
 		/etc/systemd/system/admin-antizapret.service
 		/etc/systemd/system/admin-antizapret-traffic-sync.service
 		/etc/systemd/system/admin-antizapret-traffic-sync.timer
+		/etc/systemd/system/admin-antizapret-restore@.service
 		"$PANEL_CRONTAB_PATH"
 		/root/AdminPanel
+		/var/lib/admin-antizapret
 	)
 	case "${PANEL_MODE:-preserve}" in
 		selfsigned)
@@ -251,6 +319,38 @@ configure_panel_transaction_scope() {
 			"/etc/nginx/sites-available/$nginx_config_name"
 			"/etc/nginx/sites-enabled/$nginx_config_name"
 		)
+		manage_nginx=y
+	fi
+	if [[ "$PANEL_MODE" != 'preserve' && "$PANEL_MODE" != 'nginx-letsencrypt' ]]; then
+		if [[ "$PANEL_MODE" != 'letsencrypt' ]] &&
+			[[ -e "$PANEL_NGINX_RENEWAL_HOOK" || -L "$PANEL_NGINX_RENEWAL_HOOK" ]]
+		then
+			INSTALL_TRANSACTION_PATHS+=("$PANEL_NGINX_RENEWAL_HOOK")
+		fi
+	fi
+	if [[ "$PANEL_MODE" != 'preserve' && "$PANEL_MODE" != 'letsencrypt' &&
+		"$PANEL_MODE" != 'nginx-letsencrypt' &&
+		-n "$PANEL_PREVIOUS_DOMAIN" ]] && panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN"
+	then
+		previous_renewal_config="/etc/letsencrypt/renewal/$PANEL_PREVIOUS_DOMAIN.conf"
+		if [[ -f "$previous_renewal_config" && ! -L "$previous_renewal_config" ]]; then
+			INSTALL_TRANSACTION_PATHS+=("$previous_renewal_config")
+		fi
+	fi
+	if [[ "$PANEL_MODE" != 'preserve' ]] && panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN" &&
+		[[ "$PANEL_MODE" != 'nginx-letsencrypt' || "$PANEL_PREVIOUS_DOMAIN" != "$PANEL_DOMAIN" ]]
+	then
+		previous_config_name="${PANEL_PREVIOUS_DOMAIN//./_}"
+		previous_config_file="/etc/nginx/sites-available/$previous_config_name"
+		if panel_nginx_site_is_owned "$PANEL_PREVIOUS_DOMAIN"; then
+			INSTALL_TRANSACTION_PATHS+=(
+				"$previous_config_file"
+				"/etc/nginx/sites-enabled/$previous_config_name"
+			)
+			manage_nginx=y
+		fi
+	fi
+	if [[ "$manage_nginx" == 'y' ]]; then
 		INSTALL_TRANSACTION_UNITS+=(nginx.service)
 		INSTALL_STOP_UNITS+=(nginx.service)
 		INSTALL_START_UNITS+=(nginx.service)
@@ -270,18 +370,34 @@ read_panel_env_value() {
 	sed -n "s/^${key}=//p" "$env_file" | tail -n 1
 }
 
+panel_reserves_public_http_ports() {
+	local use_https
+	[[ "$PANEL_MODE" == 'nginx-letsencrypt' ]] && return 0
+	[[ "$PANEL_MODE" == 'preserve' ]] || return 1
+	use_https="$(read_panel_env_value USE_HTTPS)"
+	[[ "${use_https,,}" == 'false' ]] && panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN"
+}
+
 prompt_panel_configuration() {
 	local current_port
 
 	PANEL_MODE=preserve
+	PANEL_PORT=5050
+	PANEL_PREVIOUS_DOMAIN=
+	PANEL_DOMAIN=
+	PANEL_EMAIL=
+	PANEL_CERT_PATH=
+	PANEL_KEY_PATH=
+
+	[[ "$INSTALL_PANEL" == 'y' ]] || return 0
 	PANEL_PORT="$(read_panel_env_value APP_PORT)"
 	PANEL_PORT="${PANEL_PORT:-5050}"
-	PANEL_DOMAIN="$(read_panel_env_value DOMAIN)"
-	PANEL_EMAIL=
+	PANEL_PREVIOUS_DOMAIN="$(read_panel_env_value DOMAIN)"
+	PANEL_DOMAIN="$PANEL_PREVIOUS_DOMAIN"
 	PANEL_CERT_PATH="$(read_panel_env_value SSL_CERT)"
 	PANEL_KEY_PATH="$(read_panel_env_value SSL_KEY)"
 
-	[[ "$INSTALL_PANEL" == 'y' && "$PANEL_RECONFIGURE" == 'y' ]] || return 0
+	[[ "$PANEL_RECONFIGURE" == 'y' ]] || return 0
 
 	echo 'Choose AdminAntizapret publication mode:'
 	echo '    1) HTTPS with a self-signed certificate'
@@ -302,25 +418,40 @@ prompt_panel_configuration() {
 	esac
 
 	current_port=$PANEL_PORT
-	PANEL_PORT=
-	until [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] &&
-		(( 10#$PANEL_PORT >= 1 && 10#$PANEL_PORT <= 65535 ))
-	do
+	while true; do
+		PANEL_PORT=
 		read -rp 'AdminAntizapret port [1-65535]: ' -e -i "$current_port" PANEL_PORT
+		if [[ ! "$PANEL_PORT" =~ ^[0-9]+$ ]] ||
+			(( 10#$PANEL_PORT < 1 || 10#$PANEL_PORT > 65535 ))
+		then
+			echo 'Port must be an integer in the range 1..65535'
+			continue
+		fi
+		PANEL_PORT=$((10#$PANEL_PORT))
+		if [[ "$PANEL_MODE" == 'letsencrypt' && "$PANEL_PORT" == 80 ]]; then
+			echo "Port 80 must remain free for Let's Encrypt standalone renewal"
+			continue
+		fi
+		if [[ "$PANEL_MODE" == 'nginx-letsencrypt' &&
+			( "$PANEL_PORT" == 80 || "$PANEL_PORT" == 443 ) ]]
+		then
+			echo 'Ports 80 and 443 are reserved for Nginx in this publication mode'
+			continue
+		fi
+		break
 	done
-	PANEL_PORT=$((10#$PANEL_PORT))
 
 	case "$PANEL_MODE" in
 		letsencrypt|nginx-letsencrypt)
 			PANEL_DOMAIN=
-			until [[ "$PANEL_DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; do
+			until panel_domain_is_valid "$PANEL_DOMAIN"; do
 				read -rp 'Panel domain: ' PANEL_DOMAIN
 			done
 			read -rp "Let's Encrypt email (optional): " PANEL_EMAIL
 			;;
 		custom)
 			PANEL_DOMAIN=
-			until [[ "$PANEL_DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; do
+			until panel_domain_is_valid "$PANEL_DOMAIN"; do
 				read -rp 'Panel domain: ' PANEL_DOMAIN
 			done
 			until [[ -f "$PANEL_CERT_PATH" ]]; do
@@ -371,6 +502,8 @@ configure_panel_environment() {
 
 	install -d -m 700 "$PANEL_INSTALL_DIR/instance" "$PANEL_INSTALL_DIR/data" \
 		"$PANEL_INSTALL_DIR/logs" "$PANEL_INSTALL_DIR/ips/runtime_backups"
+	install -d -m 755 /var/lib/admin-antizapret
+	install -d -m 700 /var/lib/admin-antizapret/restore-jobs
 	touch "$PANEL_INSTALL_DIR/.env"
 	chmod 600 "$PANEL_INSTALL_DIR/.env"
 
@@ -434,42 +567,151 @@ configure_panel_environment() {
 			set_panel_env_value SSL_KEY "$PANEL_KEY_PATH"
 			set_panel_env_value DOMAIN "$PANEL_DOMAIN"
 			;;
-		letsencrypt|nginx-letsencrypt)
-			local -a certbot_args=(certonly --standalone --non-interactive --agree-tos -d "$PANEL_DOMAIN")
-			if [[ -n "$PANEL_EMAIL" ]]; then
-				certbot_args+=(-m "$PANEL_EMAIL")
-			else
-				certbot_args+=(--register-unsafely-without-email)
-			fi
-			certbot "${certbot_args[@]}"
+		letsencrypt)
+			issue_panel_standalone_certificate
 			set_panel_env_value SESSION_COOKIE_SECURE true
 			set_panel_env_value WTF_CSRF_SSL_STRICT true
 			set_panel_env_value DOMAIN "$PANEL_DOMAIN"
-			if [[ "$PANEL_MODE" == 'letsencrypt' ]]; then
-				set_panel_env_value USE_HTTPS true
-				set_panel_env_value SSL_CERT "/etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem"
-				set_panel_env_value SSL_KEY "/etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem"
-			else
-				set_panel_env_value USE_HTTPS false
-				set_panel_env_value BIND 127.0.0.1
-				set_panel_env_value BIND_IPV6 ''
-				unset_panel_env_value SSL_CERT
-				unset_panel_env_value SSL_KEY
-				configure_panel_nginx
-			fi
+			set_panel_env_value USE_HTTPS true
+			set_panel_env_value SSL_CERT "/etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem"
+			set_panel_env_value SSL_KEY "/etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem"
+			;;
+		nginx-letsencrypt)
+			issue_panel_nginx_certificate
+			set_panel_env_value SESSION_COOKIE_SECURE true
+			set_panel_env_value WTF_CSRF_SSL_STRICT true
+			set_panel_env_value DOMAIN "$PANEL_DOMAIN"
+			set_panel_env_value USE_HTTPS false
+			set_panel_env_value BIND 127.0.0.1
+			set_panel_env_value BIND_IPV6 ''
+			unset_panel_env_value SSL_CERT
+			unset_panel_env_value SSL_KEY
 			;;
 	esac
+}
+
+panel_certbot_registration_args() {
+	if [[ -n "$PANEL_EMAIL" ]]; then
+		printf '%s\n' -m "$PANEL_EMAIL"
+	else
+		printf '%s\n' --register-unsafely-without-email
+	fi
+}
+
+issue_panel_standalone_certificate() {
+	local -a certbot_args=(
+		certonly --standalone --non-interactive --agree-tos
+		--pre-hook "$PANEL_INSTALL_DIR/script_sh/certbot_standalone_pre.sh"
+		--post-hook "$PANEL_INSTALL_DIR/script_sh/certbot_standalone_post.sh"
+		--deploy-hook "$PANEL_INSTALL_DIR/script_sh/certbot_standalone_deploy.sh"
+		-d "$PANEL_DOMAIN"
+	)
+	local -a registration_args=()
+	# При переходе с управляемого Nginx освободить port 80 до запуска
+	# standalone challenge. Все затронутые файлы уже входят в snapshot.
+	cleanup_previous_panel_nginx_site defer-start
+	if ss -H -ltn 'sport = :80' | grep -q .; then
+		echo "Error: Let's Encrypt standalone mode requires free TCP port 80"
+		ss -H -ltnp 'sport = :80' || true
+		return 1
+	fi
+	mapfile -t registration_args < <(panel_certbot_registration_args)
+	certbot_args+=("${registration_args[@]}")
+	certbot "${certbot_args[@]}"
+	panel_require_certificate_hostname
+}
+
+remove_panel_nginx_port_redirects() {
+	local port public_interface6 target_port
+	for port in 80 443; do
+		[[ "$port" == 80 ]] && target_port=50080 || target_port=50443
+		while iptables -w -t nat -C PREROUTING -i "$DEFAULT_INTERFACE" -p tcp \
+			--dport "$port" -j REDIRECT --to-ports "$target_port" 2>/dev/null
+		do
+			iptables -w -t nat -D PREROUTING -i "$DEFAULT_INTERFACE" -p tcp \
+				--dport "$port" -j REDIRECT --to-ports "$target_port"
+		done
+	done
+
+	command -v ip6tables >/dev/null 2>&1 || return 0
+	public_interface6="$(ip -6 route get 2606:4700:4700::1111 2>/dev/null |
+		awk '{ for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }')"
+	if [[ -z "$public_interface6" ]]; then
+		public_interface6="$(ip -6 route show default 2>/dev/null |
+			awk '{ for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }')"
+	fi
+	[[ -n "$public_interface6" ]] || return 0
+	for port in 80 443; do
+		[[ "$port" == 80 ]] && target_port=50080 || target_port=50443
+		while ip6tables -w -t nat -C ANTIZAPRET6-PREROUTING -i "$public_interface6" \
+			-p tcp --dport "$port" -j REDIRECT --to-ports "$target_port" 2>/dev/null
+		do
+			ip6tables -w -t nat -D ANTIZAPRET6-PREROUTING -i "$public_interface6" \
+				-p tcp --dport "$port" -j REDIRECT --to-ports "$target_port"
+		done
+	done
+}
+
+ensure_panel_nginx_running() {
+	nginx -t
+	systemctl enable nginx.service
+	if systemctl is-active --quiet nginx.service; then
+		systemctl reload nginx.service
+		return 0
+	fi
+	if ss -H -ltn '( sport = :80 or sport = :443 )' | grep -q .; then
+		echo 'Error: Cannot start Nginx because TCP port 80 or 443 is occupied'
+		ss -H -ltnp '( sport = :80 or sport = :443 )' || true
+		return 1
+	fi
+	systemctl start nginx.service
+	wait_install_unit_active nginx.service
+}
+
+configure_panel_nginx_acme_site() {
+	local config_name="${PANEL_DOMAIN//./_}"
+	local config_file="/etc/nginx/sites-available/${config_name}"
+	require_panel_nginx_site_writable
+	cat > "$config_file" <<EOF
+$PANEL_NGINX_OWNER_MARKER
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $PANEL_DOMAIN;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root $PANEL_ACME_WEBROOT;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+
+    location / {
+        return 503;
+    }
+}
+EOF
+	ln -sfn "$config_file" "/etc/nginx/sites-enabled/$config_name"
+	ensure_panel_nginx_running
 }
 
 configure_panel_nginx() {
 	local config_name="${PANEL_DOMAIN//./_}"
 	local config_file="/etc/nginx/sites-available/${config_name}"
+	require_panel_nginx_site_writable
 	cat > "$config_file" <<EOF
+$PANEL_NGINX_OWNER_MARKER
 server {
     listen 80;
     listen [::]:80;
     server_name $PANEL_DOMAIN;
-    return 301 https://\$host\$request_uri;
+    location ^~ /.well-known/acme-challenge/ {
+        root $PANEL_ACME_WEBROOT;
+        default_type text/plain;
+        try_files \$uri =404;
+    }
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
 }
 server {
     listen 443 ssl;
@@ -477,6 +719,18 @@ server {
     server_name $PANEL_DOMAIN;
     ssl_certificate /etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem;
+    location /ws/ {
+        proxy_pass http://127.0.0.1:$PANEL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
     location / {
         proxy_pass http://127.0.0.1:$PANEL_PORT;
         proxy_set_header Host \$host;
@@ -487,7 +741,108 @@ server {
 }
 EOF
 	ln -sfn "$config_file" "/etc/nginx/sites-enabled/$config_name"
-	nginx -t
+	ensure_panel_nginx_running
+}
+
+configure_panel_nginx_renewal_hook() {
+	local hook=$PANEL_NGINX_RENEWAL_HOOK
+	install -d -m 755 "$(dirname "$hook")"
+	cat > "$hook" <<'EOF'
+#!/bin/sh
+set -eu
+nginx -t
+if systemctl is-active --quiet nginx.service; then
+    systemctl reload nginx.service
+fi
+EOF
+	chmod 755 "$hook"
+}
+
+panel_require_certificate_hostname() {
+	local certificate="/etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem"
+	[[ -s "$certificate" ]] || {
+		echo "Error: Let's Encrypt certificate is missing: $certificate"
+		return 1
+	}
+	openssl x509 -in "$certificate" -noout -checkhost "$PANEL_DOMAIN"
+}
+
+issue_panel_nginx_certificate() {
+	local -a certbot_args=(
+		certonly --webroot -w "$PANEL_ACME_WEBROOT"
+		--non-interactive --agree-tos -d "$PANEL_DOMAIN"
+	)
+	local -a registration_args=()
+	mapfile -t registration_args < <(panel_certbot_registration_args)
+	certbot_args+=("${registration_args[@]}")
+
+	install -d -m 755 "$PANEL_ACME_WEBROOT/.well-known/acme-challenge"
+	remove_panel_nginx_port_redirects
+	configure_panel_nginx_acme_site
+	certbot "${certbot_args[@]}"
+	panel_require_certificate_hostname
+	configure_panel_nginx
+	configure_panel_nginx_renewal_hook
+}
+
+cleanup_previous_panel_standalone_hooks() {
+	local renewal_config
+	panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN" || return 0
+	case "$PANEL_MODE" in
+		preserve) return 0 ;;
+		letsencrypt)
+			[[ "$PANEL_PREVIOUS_DOMAIN" != "$PANEL_DOMAIN" ]] || return 0
+			;;
+	esac
+
+	renewal_config="/etc/letsencrypt/renewal/$PANEL_PREVIOUS_DOMAIN.conf"
+	if [[ -L "$renewal_config" ]]; then
+		echo "Warning: Let's Encrypt renewal config is a symbolic link and was left intact: $renewal_config"
+		return 0
+	fi
+	[[ -f "$renewal_config" ]] || return 0
+	sed -i "\\|$PANEL_INSTALL_DIR/script_sh/certbot_standalone_|d" "$renewal_config"
+}
+
+cleanup_previous_panel_nginx_site() {
+	local old_name old_config old_enabled start_mode=${1:-restore-service}
+	[[ "$PANEL_MODE" != 'preserve' ]] || return 0
+
+	if panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN" &&
+		[[ "$PANEL_MODE" != 'nginx-letsencrypt' || "$PANEL_PREVIOUS_DOMAIN" != "$PANEL_DOMAIN" ]]
+	then
+		old_name="${PANEL_PREVIOUS_DOMAIN//./_}"
+		old_config="/etc/nginx/sites-available/$old_name"
+		old_enabled="/etc/nginx/sites-enabled/$old_name"
+		if [[ -e "$old_config" || -L "$old_config" || -e "$old_enabled" || -L "$old_enabled" ]]; then
+			if panel_nginx_site_is_owned "$PANEL_PREVIOUS_DOMAIN"; then
+				if [[ -L "$old_enabled" && "$(readlink -f "$old_enabled")" == "$(readlink -f "$old_config")" ]]; then
+					rm -f -- "$old_enabled"
+				fi
+				rm -f -- "$old_config"
+				PANEL_PREVIOUS_NGINX_SITE_REMOVED=y
+			else
+				echo "Warning: Previous Nginx site is not installer-managed and was left intact: $old_config"
+			fi
+		fi
+	fi
+
+	if [[ "$PANEL_PREVIOUS_NGINX_SITE_REMOVED" == 'y' ]] && command -v nginx >/dev/null 2>&1; then
+		nginx -t
+		if systemctl is-active --quiet nginx.service; then
+			systemctl reload nginx.service
+		elif [[ "$start_mode" != 'defer-start' ]] &&
+			install_transaction_unit_was_active nginx.service
+		then
+			systemctl start nginx.service
+			wait_install_unit_active nginx.service
+		fi
+	fi
+	if [[ "$PANEL_MODE" != 'nginx-letsencrypt' ]]; then
+		rm -f -- "$PANEL_NGINX_RENEWAL_HOOK"
+		rm -rf -- "$PANEL_ACME_WEBROOT"
+	fi
+	cleanup_previous_panel_standalone_hooks
 }
 
 validate_panel_runtime() {
@@ -518,15 +873,28 @@ validate_panel_runtime() {
 			return 1
 		}
 	fi
-	"$PANEL_INSTALL_DIR/venv/bin/python" - "$PANEL_INSTALL_DIR/instance/users.db" <<'PY'
-import sqlite3
-import sys
-
-with sqlite3.connect(sys.argv[1]) as connection:
-    result = connection.execute("PRAGMA quick_check").fetchone()
-if not result or result[0] != "ok":
-    raise SystemExit(f"SQLite quick_check failed: {result!r}")
-PY
+	if [[ "$PANEL_MODE" == 'letsencrypt' ]]; then
+		panel_require_certificate_hostname
+	elif [[ "$PANEL_MODE" == 'nginx-letsencrypt' ]]; then
+		systemctl is-active --quiet nginx.service || {
+			echo 'Error: Nginx is not active for the AdminAntizapret panel'
+			return 1
+		}
+		nginx -t
+		panel_require_certificate_hostname
+		status="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' --resolve "$PANEL_DOMAIN:443:127.0.0.1" \
+			"https://$PANEL_DOMAIN/" || true)"
+		case "$status" in
+			200|302) ;;
+			*)
+				echo "Error: AdminAntizapret Nginx health check returned HTTP $status"
+				return 1
+				;;
+		esac
+	fi
+	cleanup_previous_panel_nginx_site
+	"$PANEL_INSTALL_DIR/venv/bin/python" "$PANEL_INSTALL_DIR/utils/init_db.py" \
+		--check-integrity "$PANEL_INSTALL_DIR/instance/users.db"
 }
 
 acquire_install_lock() {
@@ -588,6 +956,44 @@ unlock_install_custom_hooks() {
 	flock -u "$INSTALL_CUSTOM_HOOK_LOCK_FD" >/dev/null 2>&1 || true
 	exec {INSTALL_CUSTOM_HOOK_LOCK_FD}>&-
 	INSTALL_CUSTOM_HOOK_LOCK_FD=
+}
+
+lock_panel_restore_jobs() {
+	local listing unit
+	local -a active_units=()
+
+	[[ "$INSTALL_PANEL" == 'y' ]] || return 0
+	if ! listing="$(systemctl list-units --all --plain --no-legend \
+		--state=active,activating,reloading,deactivating \
+		'admin-antizapret-restore@*.service' 2>/dev/null)"
+	then
+		echo 'Error: Cannot inspect active AdminAntizapret restore jobs'
+		return 1
+	fi
+	while read -r unit _; do
+		[[ -z "$unit" ]] || active_units+=("$unit")
+	done <<< "$listing"
+	if (( ${#active_units[@]} > 0 )); then
+		echo "Error: AdminAntizapret restore is active: ${active_units[*]}"
+		return 1
+	fi
+
+	if ! exec {PANEL_RESTORE_LOCK_FD}> "$PANEL_RESTORE_LOCK" ||
+		! chmod 600 "$PANEL_RESTORE_LOCK" ||
+		! flock -n "$PANEL_RESTORE_LOCK_FD"
+	then
+		[[ -z "$PANEL_RESTORE_LOCK_FD" ]] || exec {PANEL_RESTORE_LOCK_FD}>&-
+		PANEL_RESTORE_LOCK_FD=
+		echo 'Error: AdminAntizapret restore is active; wait for it to finish'
+		return 1
+	fi
+}
+
+unlock_panel_restore_jobs() {
+	[[ -n "$PANEL_RESTORE_LOCK_FD" ]] || return 0
+	flock -u "$PANEL_RESTORE_LOCK_FD" >/dev/null 2>&1 || true
+	exec {PANEL_RESTORE_LOCK_FD}>&-
+	PANEL_RESTORE_LOCK_FD=
 }
 
 write_install_custom_hook_state() {
@@ -716,6 +1122,12 @@ abort_install_transaction_before_snapshot() {
 begin_install_transaction() {
 	local copy_failed=n path state unit value
 	local old_umask
+
+	if declare -F lock_panel_restore_jobs >/dev/null; then
+		if ! lock_panel_restore_jobs; then
+			return 1
+		fi
+	fi
 
 	# Capture state before stopping writers. A failed pre-snapshot phase must be
 	# able to put timers and services back exactly as they were found.
@@ -1302,6 +1714,9 @@ finish_install_transaction() {
 	[[ -z "${BACKUP_STAGING:-}" ]] || rm -rf -- "$BACKUP_STAGING" || true
 	[[ -z "${OPENVPN_CCD_STAGING:-}" ]] || rm -rf -- "$OPENVPN_CCD_STAGING" || true
 	rm -rf -- /tmp/antizapret /tmp/dnslib || true
+	if declare -F unlock_panel_restore_jobs >/dev/null; then
+		unlock_panel_restore_jobs
+	fi
 	exit "$original_status"
 }
 
@@ -2514,13 +2929,23 @@ else
 	DEFAULT_FAKE_IPV6_NETWORK="ULA /96 derived from $VPN_IPV6_PREFIX"
 fi
 echo "Default FAKE IPv6 address range:     $DEFAULT_FAKE_IPV6_NETWORK"
-echo 'Alternative FAKE IPv6 address range: 2001:2::/48 (benchmarking)'
+echo 'Alternative FAKE IPv6 address range: 2001:2::/48'
 until [[ "$ALTERNATIVE_FAKE_IPV6" =~ ^[yn]$ ]]; do
 	read -rp 'Use alternative range of FAKE IPv6 addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IPV6
 done
 echo
-until [[ "$OPENVPN_BACKUP_TCP" =~ ^[yn]$ ]]; do
-	read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP
+while true; do
+	until [[ "$OPENVPN_BACKUP_TCP" =~ ^[yn]$ ]]; do
+		read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP
+	done
+	if [[ "$INSTALL_PANEL" == 'y' && "$OPENVPN_BACKUP_TCP" == 'y' ]] &&
+		{ panel_reserves_public_http_ports || [[ "$PANEL_PORT" == 80 || "$PANEL_PORT" == 443 ]]; }
+	then
+		echo 'TCP backup ports 80/443 conflict with the panel publication ports. Choose n.'
+		OPENVPN_BACKUP_TCP=
+		continue
+	fi
+	break
 done
 echo
 until [[ "$OPENVPN_BACKUP_UDP" =~ ^[yn]$ ]]; do
@@ -2870,7 +3295,8 @@ if [[ "$INSTALL_PANEL" != 'y' ]]; then
 	rm -f \
 		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret.service \
 		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-traffic-sync.service \
-		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-traffic-sync.timer
+		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-traffic-sync.timer \
+		/tmp/antizapret/setup/etc/systemd/system/admin-antizapret-restore@.service
 elif [[ -f "$PANEL_INSTALL_DIR/.antizapret-integrated" ]]; then
 	PANEL_STATE_STAGING="$(mktemp -d /tmp/antizapret-panel-state.XXXXXX)"
 	for panel_state_path in .env instance data logs backups ips/runtime_backups; do
@@ -3181,7 +3607,8 @@ fi
 
 if [[ "$INSTALL_PANEL" == 'y' ]]; then
 	find "$PANEL_INSTALL_DIR/script_sh" -type f -name '*.sh' -exec chmod 755 {} +
-	python3 -m venv "$PANEL_INSTALL_DIR/venv"
+	PANEL_PYTHON_BIN="$(command -v python3)"
+	"$PANEL_PYTHON_BIN" -m venv "$PANEL_INSTALL_DIR/venv"
 	"$PANEL_INSTALL_DIR/venv/bin/pip" install -q --upgrade pip setuptools wheel
 	"$PANEL_INSTALL_DIR/venv/bin/pip" install -q -r "$PANEL_INSTALL_DIR/requirements.txt"
 	configure_panel_environment

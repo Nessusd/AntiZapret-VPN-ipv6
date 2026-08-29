@@ -178,6 +178,7 @@
     } catch (_err) {
       data = {};
     }
+    data._httpStatus = response.status;
     if (!response.ok && data.success !== false) {
       data.success = false;
       data.message = data.message || `Ошибка HTTP ${response.status}`;
@@ -222,6 +223,50 @@
     } catch (err) {
       notify(err.message || "Ошибка ожидания фоновой задачи", "error");
     }
+  };
+
+  const waitForRestoreJob = async (data) => {
+    const statusUrl = String(data?.status_url || "").trim();
+    const statusToken = String(data?.status_token || "").trim();
+    if (!statusUrl || !statusToken) {
+      throw new Error("Сервер не вернул ключ отслеживания восстановления");
+    }
+
+    const deadline = Date.now() + 135 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      let terminalError = "";
+      try {
+        const statusPayload = await apiFetch(statusUrl, {
+          method: "GET",
+          cache: "no-store",
+          headers: { "X-Restore-Token": statusToken },
+        });
+        const statusCode = Number(statusPayload?._httpStatus || 0);
+        if (statusPayload?.success === false) {
+          if (statusCode >= 400 && statusCode < 500) {
+            terminalError = statusPayload.message || `Ошибка HTTP ${statusCode}`;
+          }
+          if (!terminalError) continue;
+        }
+        const restore = statusPayload?.restore || {};
+        if (restore.status === "completed") {
+          notify(restore.result?.message || "Восстановление завершено", "success");
+          window.setTimeout(() => window.location.reload(), 800);
+          return;
+        }
+        if (restore.status === "failed") {
+          const rollbackNote = restore.rollback_success === false
+            ? " Автоматический откат также завершился с ошибками."
+            : "";
+          terminalError = (restore.error || "Восстановление завершилось с ошибкой") + rollbackNote;
+        }
+      } catch (_error) {
+        // Во время штатного перезапуска панели endpoint временно недоступен.
+      }
+      if (terminalError) throw new Error(terminalError);
+    }
+    throw new Error("Превышено время ожидания восстановления");
   };
 
   const handleApiMessages = (data, fallbackType) => {
@@ -323,8 +368,11 @@
           body: JSON.stringify({ file_name: fileName }),
         });
         handleApiMessages(data, "warning");
+        if (data.success) {
+          await waitForRestoreJob(data);
+        }
       } catch (_err) {
-        notify("Ошибка сети при восстановлении", "error");
+        notify(_err.message || "Ошибка сети при восстановлении", "error");
       } finally {
         setBusy(restoreBtn, false);
       }

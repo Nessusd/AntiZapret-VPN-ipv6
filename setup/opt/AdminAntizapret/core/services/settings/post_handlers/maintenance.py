@@ -318,8 +318,6 @@ def handle_backup_restore(
     form,
     *,
     flash,
-    session,
-    enqueue_background_task,
     backup_manager_service,
     log_user_action_event,
 ):
@@ -332,38 +330,31 @@ def handle_backup_restore(
         return None
 
     try:
-        def _task_restore_backup(progress_updater=None):
-            if progress_updater:
-                progress_updater(15, "Восстановление: остановка службы…")
-            result = backup_manager_service.restore_backup(backup_file_name)
-            if progress_updater:
-                progress_updater(85, "Восстановление: запуск службы…")
-            return {
-                "message": "Восстановление из бэкапа завершено",
-                "output": str(result.get("archive_path", "")),
-            }
+        result = backup_manager_service.queue_restore(backup_file_name)
+    except Exception as exc:
+        flash(f"Ошибка запуска восстановления бэкапа: {exc}", "error")
+        return None
 
-        task = enqueue_background_task(
-            "app_backup_restore",
-            _task_restore_backup,
-            created_by_username=session.get("username"),
-            queued_message="Восстановление из бэкапа поставлено в очередь",
-        )
-        flash(
-            (
-                f"Восстановление из бэкапа запущено в фоне (task: {task.id[:8]}). "
-                "Сервис будет перезапущен автоматически."
-            ),
-            "warning",
-        )
+    flash(
+        (
+            f"Восстановление из бэкапа передано системной службе "
+            f"(job: {result['job_id'][:8]}). "
+            "Сервис будет перезапущен автоматически."
+        ),
+        "warning",
+    )
+    try:
         log_user_action_event(
             "settings_backup_restore",
             target_type="backup",
             target_name=backup_file_name,
         )
     except Exception as exc:
-        flash(f"Ошибка запуска восстановления бэкапа: {exc}", "error")
-    return None
+        flash(
+            f"Восстановление запущено, но запись в аудит не сохранена: {exc}",
+            "warning",
+        )
+    return result
 
 
 def handle_backup_delete(

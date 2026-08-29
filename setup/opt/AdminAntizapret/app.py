@@ -52,21 +52,14 @@ from config.app_paths import (
     OPENVPN_FOLDERS,
     RESULT_DIR_FILES,
 )
-from ips import ip_manager
 from routes.route_wiring import register_all_routes
 from core.models import (
     ActiveWebSession,
-    AntifilterCidr,
-    AntifilterMeta,
     BackgroundTask,
-    CidrDbRefreshLog,
-    CidrPreset,
     LogsDashboardCache,
     OpenVPNPeerInfoCache,
     OpenVPNPeerInfoHistory,
     OpenVpnAccessPolicy,
-    ProviderCidr,
-    ProviderMeta,
     QrDownloadAuditLog,
     QrDownloadToken,
     TelegramMiniAuditLog,
@@ -81,8 +74,6 @@ from core.models import (
     WgAccessPolicy,
     db,
 )
-from core.services.cidr_db_updater import CidrDbUpdaterService
-from core.services.settings.cidr_tasks import init_cidr_task_db
 from core.services.logs_dashboard.collector import collect_logs_dashboard_data as collect_logs_dashboard_data_service
 from core.services.request_user import get_user_by_username
 from core.services import (
@@ -494,19 +485,22 @@ background_task_service = BackgroundTaskService(
     app_root=APP_ROOT,
 )
 
-try:
-    with app.app_context():
-        _recovered_stale_tasks = background_task_service.recover_stale_background_tasks()
-        if _recovered_stale_tasks:
-            app.logger.warning(
-                "Помечено как failed %s зависших фоновых задач после старта процесса",
-                _recovered_stale_tasks,
+if not _SKIP_APP_BOOTSTRAP:
+    try:
+        with app.app_context():
+            _recovered_stale_tasks = (
+                background_task_service.recover_stale_background_tasks()
             )
-except Exception as _stale_tasks_exc:
-    app.logger.warning(
-        "Не удалось восстановить зависшие фоновые задачи при старте: %s",
-        _stale_tasks_exc,
-    )
+            if _recovered_stale_tasks:
+                app.logger.warning(
+                    "Помечено как failed %s зависших фоновых задач после старта процесса",
+                    _recovered_stale_tasks,
+                )
+    except Exception as _stale_tasks_exc:
+        app.logger.warning(
+            "Не удалось восстановить зависшие фоновые задачи при старте: %s",
+            _stale_tasks_exc,
+        )
 
 
 def _serialize_background_task(task):
@@ -555,18 +549,6 @@ def _run_db_migrations():
 
 
 _run_db_migrations()
-
-init_cidr_task_db(app, db, BackgroundTask)
-
-cidr_db_updater_service = CidrDbUpdaterService(db=db)
-
-try:
-    with app.app_context():
-        cidr_db_updater_service.seed_builtin_presets()
-        cidr_db_updater_service.cleanup_retired_provider_data()
-except Exception as _e:
-    app.logger.warning(f"Не удалось инициализировать CIDR-пресеты и очистку провайдеров: {_e}")
-
 
 register_current_user_context_processor(app, session, User)
 
@@ -1406,7 +1388,7 @@ from core.services.feature_guards import register_feature_guards
 
 register_feature_guards(app, get_env_value=_get_env_value)
 
-if bool(_runtime_get("MONITOR_ENABLED", True)):
+if not _SKIP_APP_BOOTSTRAP and bool(_runtime_get("MONITOR_ENABLED", True)):
     admin_notify_service.start_monitor()
-else:
+elif not _SKIP_APP_BOOTSTRAP:
     app.logger.info("Мониторинг нагрузки CPU/RAM отключён (MONITOR_ENABLED=false)")

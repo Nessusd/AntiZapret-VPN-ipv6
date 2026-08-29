@@ -3,14 +3,16 @@ import argparse
 import logging
 import os
 import re
+import sqlite3
 import sys
 from getpass import getpass
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app import app, db, User
+from core.models import User, db
+from core.services.db_migration import DatabaseMigrationService
+from flask import Flask
 from werkzeug.security import generate_password_hash
-
 
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 logger = logging.getLogger(__name__)
@@ -181,6 +183,48 @@ def list_users():
     return True
 
 
+def check_database_integrity(database_path):
+    path = os.path.abspath(str(database_path or ""))
+    if not os.path.isfile(path):
+        _err(f"Файл базы данных не найден: {path}")
+        return False
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        try:
+            row = connection.execute("PRAGMA quick_check").fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        _err(f"Не удалось проверить целостность базы данных: {exc}")
+        return False
+    if not row or str(row[0]).strip().lower() != "ok":
+        _err(f"Проверка целостности базы данных завершилась с ошибкой: {row}")
+        return False
+    return True
+
+
+def build_database_app():
+    """Создаёт минимальный Flask-контекст только для работы с базой панели."""
+    app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    instance_path = os.path.join(app_root, "instance")
+    database_path = os.path.join(instance_path, "users.db")
+    os.makedirs(instance_path, mode=0o700, exist_ok=True)
+
+    database_app = Flask(
+        "admin_antizapret_database",
+        root_path=app_root,
+        instance_path=instance_path,
+    )
+    database_app.config.update(
+        SQLALCHEMY_DATABASE_URI=f"sqlite:///{database_path}",
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 30}},
+    )
+    db.init_app(database_app)
+    DatabaseMigrationService(app=database_app, db=db).run_db_migrations(strict=True)
+    return database_app
+
+
 def _resolve_add_user_payload(args):
     if len(args.add_user) not in (1, 2):
         _err("--add-user принимает USERNAME или USERNAME PASSWORD (legacy).")
@@ -216,12 +260,22 @@ if __name__ == "__main__":
     parser.add_argument('--list-users', action='store_true', help='Вывести список пользователей')
     parser.add_argument('--has-users', action='store_true', help='Завершиться с кодом 0, если есть хотя бы один пользователь')
     parser.add_argument('--ensure-schema', action='store_true', help='Создать/обновить схему без интерактивных вопросов')
+    parser.add_argument(
+        '--check-integrity',
+        metavar='DB_FILE',
+        help='Проверить SQLite PRAGMA quick_check',
+    )
 
     args = parser.parse_args()
 
-    with app.app_context():
-        db.create_all()
+    if args.check_integrity:
+        sys.exit(0 if check_database_integrity(args.check_integrity) else 1)
 
+    # Утилита БД не импортирует app.py: сетевой firewall, cron, мониторинг и
+    # прочие runtime-сервисы панели не должны запускаться при миграции.
+    app = build_database_app()
+
+    with app.app_context():
         if args.ensure_schema:
             pass
         elif args.has_users:

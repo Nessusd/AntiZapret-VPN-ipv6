@@ -87,7 +87,7 @@ menu_network_https() {
     done
 }
 
-menu_backups_updates() {
+menu_backups() {
     while true; do
         clear
         _m_top

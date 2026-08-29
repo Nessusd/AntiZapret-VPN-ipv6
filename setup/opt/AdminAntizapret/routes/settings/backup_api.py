@@ -131,26 +131,55 @@ def register_backup_api_routes(
     @auth_manager.admin_required
     def api_backups_restore():
         payload = request.get_json(silent=True) or {}
-        file_name = (payload.get("file_name") or request.form.get("backup_file_name") or "").strip()
+        file_name = (
+            payload.get("file_name") or request.form.get("backup_file_name") or ""
+        ).strip()
         collector = _FlashCollector()
-        handle_backup_restore(
+        restore_result = handle_backup_restore(
             {
                 "backup_restore_action": "restore",
                 "backup_file_name": file_name,
             },
             flash=collector,
-            session=session,
-            enqueue_background_task=enqueue_background_task,
             backup_manager_service=backup_manager_service,
             log_user_action_event=log_user_action_event,
         )
-        return _api_result(collector, extra={"file_name": file_name})
+        extra = {"file_name": file_name}
+        if restore_result:
+            extra.update(
+                {
+                    "restore_job_id": restore_result["job_id"],
+                    "status_url": restore_result["status_url"],
+                    "status_token": restore_result["status_token"],
+                    "queued": True,
+                }
+            )
+        return _api_result(collector, extra=extra)
+
+    @app.route("/api/backups/restore/<job_id>", methods=["GET"])
+    def api_backups_restore_status(job_id):
+        try:
+            restore_status = backup_manager_service.read_restore_status_with_token(
+                job_id,
+                request.headers.get("X-Restore-Token", ""),
+            )
+        except PermissionError as exc:
+            return jsonify({"success": False, "message": str(exc)}), 403
+        except (ValueError, FileNotFoundError) as exc:
+            return jsonify({"success": False, "message": str(exc)}), 404
+        except Exception as exc:
+            return jsonify({"success": False, "message": str(exc)}), 500
+        response = jsonify({"success": True, "restore": restore_status})
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/backups/delete", methods=["POST"])
     @auth_manager.admin_required
     def api_backups_delete():
         payload = request.get_json(silent=True) or {}
-        file_name = (payload.get("file_name") or request.form.get("backup_file_name") or "").strip()
+        file_name = (
+            payload.get("file_name") or request.form.get("backup_file_name") or ""
+        ).strip()
         collector = _FlashCollector()
         handle_backup_delete(
             {

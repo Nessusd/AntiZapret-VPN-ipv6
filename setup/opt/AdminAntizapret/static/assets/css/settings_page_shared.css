@@ -481,6 +481,12 @@ body {
   color: #ddf6eb;
 }
 
+.section-micro-status.state-disabled {
+  border-color: rgba(154, 166, 173, 0.54);
+  background: rgba(57, 66, 72, 0.72);
+  color: #cbd6db;
+}
+
 .settings-inline-mini-save {
   margin-top: 0.5rem;
   min-height: 34px;

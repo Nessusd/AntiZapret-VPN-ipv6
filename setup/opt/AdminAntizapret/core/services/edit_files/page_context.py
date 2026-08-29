@@ -11,7 +11,6 @@ def build_edit_files_get_context(file_editor, get_public_download_enabled, url_f
     file_contents = file_editor.get_file_contents()
     file_display_titles = file_editor.get_file_display_titles()
     public_download_enabled = get_public_download_enabled()
-
     file_nav_items = []
     editor_forms = []
 

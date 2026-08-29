@@ -18,7 +18,7 @@ DEFAULT_PREFIX = "fd3a:c9bc:6bcb::/48"
 MODE_SUBNETS = {"antizapret": 0x2908, "vpn": 0x2808}
 FAKE_SUBNET = 0x29FF
 FAKE_PREFIX_LENGTH = 96
-BENCHMARK_FAKE_IPV6_NETWORK = ipaddress.IPv6Network("2001:2::/48")
+ALTERNATIVE_FAKE_IPV6_NETWORK = ipaddress.IPv6Network("2001:2::/48")
 ASSIGNMENT_RE = re.compile(
     r"^(?P<prefix>\s*)(?P<name>Address|AllowedIPs)"
     r"(?P<separator>\s*=\s*)(?P<value>.*?)(?P<newline>\r?\n)?$"
@@ -52,7 +52,7 @@ def mode_network(prefix: str, mode: str) -> ipaddress.IPv6Network:
 
 def fake_network(prefix: str, alternative: bool = False) -> ipaddress.IPv6Network:
     if alternative:
-        return BENCHMARK_FAKE_IPV6_NETWORK
+        return ALTERNATIVE_FAKE_IPV6_NETWORK
     base = parse_base_prefix(prefix)
     return ipaddress.IPv6Network(
         (int(base.network_address) | (FAKE_SUBNET << 64), FAKE_PREFIX_LENGTH)

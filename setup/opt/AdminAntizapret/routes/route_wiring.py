@@ -106,7 +106,6 @@ def register_all_routes(app, sock, deps):
         telegram_mini_audit_log_model=g("TelegramMiniAuditLog"),
         user_action_log_model=g("UserActionLog"),
         ip_restriction=g("ip_restriction"),
-        ip_manager=g("ip_manager"),
         collect_all_openvpn_files_for_access=g("collect_all_openvpn_files_for_access"),
         collect_all_configs_for_access=g("collect_all_configs_for_access"),
         build_openvpn_access_groups=g("build_openvpn_access_groups"),
@@ -137,14 +136,11 @@ def register_all_routes(app, sock, deps):
         app_root=g("APP_ROOT"),
         log_telegram_audit_event=g("_log_telegram_audit_event"),
         log_user_action_event=g("_log_user_action_event"),
-        cidr_db_updater_service=g("cidr_db_updater_service"),
     )
 
     register_routing_routes(
         app,
         auth_manager=g("auth_manager"),
-        ip_manager=g("ip_manager"),
-        get_env_value=g("_get_env_value"),
     )
 
     register_index_routes(

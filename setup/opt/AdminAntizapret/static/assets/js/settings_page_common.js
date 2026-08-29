@@ -277,15 +277,8 @@ const BACKGROUND_TASK_STAGE_FALLBACKS = {
   run_doall: "AntiZapret: применение изменений…",
   restart_service: "Перезапуск службы AdminAntizapret…",
   app_backup_create: "Резервная копия: создание архива…",
-  app_backup_restore: "Восстановление из резервной копии…",
   app_backup_test_tg: "Резервная копия: отправка в Telegram…",
   logs_dashboard_refresh: "Обновление панели логов…",
-  cidr_db_refresh: "Обновление CIDR в базе данных…",
-  cidr_db_refresh_dry_run: "Проверка обновления CIDR (dry-run)…",
-  cidr_generate: "Генерация маршрутов из базы данных…",
-  cidr_estimate: "Оценка генерации маршрутов…",
-  cidr_update: "Обновление CIDR-файлов…",
-  cidr_rollback: "Откат CIDR-файлов…",
 };
 
 const GENERIC_BACKGROUND_TASK_STAGES = new Set([

@@ -14,10 +14,15 @@ from flask_sock import Sock
 from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import event as _sa_event
 from sqlalchemy.engine import Engine as _SAEngine
+from utils.ip_restriction import ip_restriction
 
 from core.models import db
 from core.services.session_security import build_session_security_config
-from utils.ip_restriction import ip_restriction
+
+_SKIP_RUNTIME_BOOTSTRAP = (
+    os.getenv("ADMIN_ANTIZAPRET_SKIP_APP_BOOTSTRAP", "").strip().lower()
+    in {"1", "true", "yes"}
+)
 
 try:
     from flask_limiter import Limiter
@@ -105,7 +110,8 @@ def create_app():
 
     csrf = CSRFProtect(app)
     sock = Sock(app)
-    ip_restriction.init_app(app)
+    if not _SKIP_RUNTIME_BOOTSTRAP:
+        ip_restriction.init_app(app)
     db.init_app(app)
 
     limiter = _build_limiter(app)
