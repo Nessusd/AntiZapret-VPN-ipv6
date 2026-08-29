@@ -22,6 +22,14 @@ cd /root/antizapret
 rm -rf temp
 mkdir -p temp result
 
+# Эти устаревшие выгрузки больше не поддерживаются. Удаляем оставшиеся файлы
+# при любом режиме обновления, чтобы они не продолжали раздаваться после
+# переустановки поверх прежней версии.
+rm -f \
+	result/tp-link-openvpn-routes.txt \
+	result/keenetic-wireguard-routes.txt \
+	result/mikrotik-wireguard-routes.txt
+
 # Частичное обновление не должно удалять результаты второго класса. В частности,
 # route-ips*.txt нужны BIRD и должны переживать запуск только с параметром host.
 case "${1:-}" in
@@ -31,9 +39,6 @@ case "${1:-}" in
 			result/drop-ips.txt \
 			result/deny-ips.txt \
 			result/DEFAULT \
-			result/tp-link-openvpn-routes.txt \
-			result/keenetic-wireguard-routes.txt \
-			result/mikrotik-wireguard-routes.txt \
 			result/ips \
 			result/forward-ips.txt \
 			result/allow-ips.txt
@@ -111,18 +116,12 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 	[[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]] && IP="${CLIENT_IP:-172}" || IP=10
 	[[ "$ALTERNATIVE_FAKE_IP" == 'y' ]] && FAKE_IP="${FAKE_IP:-198.18}" || FAKE_IP="$IP.30"
 
-	# Создаем файл для OpenVPN и файлы маршрутов для роутеров
+	# Создаем служебный список маршрутов для OpenVPN.
 	echo "push \"route $FAKE_IP.0.0 255.254.0.0\"" > result/DEFAULT
-	echo -e "route 0.0.0.0 128.0.0.0 net_gateway\nroute 128.0.0.0 128.0.0.0 net_gateway\nroute $IP.29.0.0 255.255.248.0\nroute $FAKE_IP.0.0 255.254.0.0" > result/tp-link-openvpn-routes.txt
-	echo -e "route ADD DNS_IP_1 MASK 255.255.255.255 $IP.29.8.1\nroute ADD DNS_IP_2 MASK 255.255.255.255 $IP.29.8.1\nroute ADD $FAKE_IP.0.0 MASK 255.254.0.0 $IP.29.8.1" > result/keenetic-wireguard-routes.txt
-	echo "/ip route add dst-address=$FAKE_IP.0.0/15 gateway=$IP.29.8.1 distance=1 comment=\"antizapret-wireguard\"" > result/mikrotik-wireguard-routes.txt
 	while read -r cidr; do
 		NET="$(echo "$cidr" | awk -F '/' '{print $1}')"
 		MASK="$(sipcalc -- "$cidr" | awk '/Network mask/ {print $4; exit;}')"
 		echo "push \"route $NET $MASK\"" >> result/DEFAULT
-		echo "route $NET $MASK" >> result/tp-link-openvpn-routes.txt
-		echo "route ADD $NET MASK $MASK $IP.29.8.1" >> result/keenetic-wireguard-routes.txt
-		echo "/ip route add dst-address=$cidr gateway=$IP.29.8.1 distance=1 comment=\"antizapret-wireguard\"" >> result/mikrotik-wireguard-routes.txt
 	done < result/route-ips.txt
 
 	# Обновляем файл DEFAULT в OpenVPN только если файл изменился

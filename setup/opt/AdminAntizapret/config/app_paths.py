@@ -10,10 +10,8 @@ import re
 
 #   hostname/public_download/
 RESULT_DIR_FILES = {
-    "keenetic": "keenetic-wireguard-routes.txt",
-    "mikrotik": "mikrotik-wireguard-routes.txt",
     "ips": "route-ips.txt",
-    "tplink": "tp-link-openvpn-routes.txt",
+    "ips6": "route-ips6.txt",
 }
 
 OPENVPN_FOLDERS = [

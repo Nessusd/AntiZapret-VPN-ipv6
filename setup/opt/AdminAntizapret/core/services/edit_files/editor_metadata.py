@@ -28,6 +28,25 @@ _IP_LIST_PATHS = {
     "deny-ips": "config/deny-ips.txt",
 }
 
+_IP_LIST_TITLES = {
+    "include_ips": "Добавление IP-адресов для маршрутизации через AntiZapret VPN",
+    "exclude-ips": "Исключение IP-адресов из маршрутизации через AntiZapret VPN",
+    "forward-ips": (
+        "Добавление IP-адресов, неявно разрешённых для маршрутизации через "
+        "AntiZapret VPN"
+    ),
+    "drop-ips": (
+        "Добавление IP-адресов, запрещённых для форвардинга через AntiZapret VPN "
+        "и полный VPN"
+    ),
+    "allow-ips": (
+        "Исключение IP-адресов из проверки защиты от сканирования и сетевых атак"
+    ),
+    "deny-ips": (
+        "Добавление IP-адресов, заблокированных для входящих подключений к серверу"
+    ),
+}
+
 
 def _get_ip_list_subtitle(file_type: str) -> str:
     return (
@@ -43,3 +62,7 @@ def get_editor_subtitle(file_type: str) -> str:
     if file_type in _IP_LIST_PURPOSES:
         return _get_ip_list_subtitle(file_type)
     return _DEFAULT_SUBTITLE
+
+
+def get_editor_title(file_type: str, fallback: str) -> str:
+    return _IP_LIST_TITLES.get(file_type, fallback)

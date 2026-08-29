@@ -1,4 +1,6 @@
-from .editor_metadata import get_editor_subtitle
+from core.services.antizapret_settings import is_antizapret_ipv6_enabled
+
+from .editor_metadata import get_editor_subtitle, get_editor_title
 from .file_groups import resolve_file_nav_group
 from .route_actions import build_route_download_actions
 
@@ -11,11 +13,13 @@ def build_edit_files_get_context(file_editor, get_public_download_enabled, url_f
     file_contents = file_editor.get_file_contents()
     file_display_titles = file_editor.get_file_display_titles()
     public_download_enabled = get_public_download_enabled()
+    ipv6_enabled = is_antizapret_ipv6_enabled()
     file_nav_items = []
     editor_forms = []
 
     for index, (file_type, content) in enumerate(file_contents.items()):
-        title = file_display_titles.get(file_type, _fallback_title(file_type))
+        dynamic_title = file_display_titles.get(file_type, _fallback_title(file_type))
+        title = get_editor_title(file_type, dynamic_title)
         group = resolve_file_nav_group(file_type)
         is_active = index == 0
 
@@ -43,6 +47,10 @@ def build_edit_files_get_context(file_editor, get_public_download_enabled, url_f
     return {
         "file_nav_items": file_nav_items,
         "editor_forms": editor_forms,
-        "route_actions": build_route_download_actions(public_download_enabled, url_for),
+        "route_actions": build_route_download_actions(
+            public_download_enabled,
+            url_for,
+            ipv6_enabled=ipv6_enabled,
+        ),
         "public_download_enabled": public_download_enabled,
     }

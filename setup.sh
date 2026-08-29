@@ -44,6 +44,56 @@ require_vpn_key_permissions() {
 	fi
 }
 
+replace_known_ip_list_header() {
+	local path=$1 replacement=$2 first_line='' legacy_header
+	shift 2
+
+	[[ -f "$path" ]] || return 0
+	IFS= read -r first_line < "$path" || [[ -n "$first_line" ]] || return 0
+	first_line=${first_line%$'\r'}
+
+	for legacy_header in "$@"; do
+		[[ "$first_line" == "$legacy_header" ]] || continue
+		sed -i "1c\\$replacement" "$path" || return 1
+		return 0
+	done
+}
+
+normalize_preserved_ip_list_headers() {
+	local config_dir=$1
+
+	replace_known_ip_list_header \
+		"$config_dir/include-ips.txt" \
+		'# Добавление IP-адресов для маршрутизации через AntiZapret VPN' \
+		'# Добавление IPv4-адресов для маршрутизации через AntiZapret VPN' \
+		'# Добавление IPv4- и IPv6-адресов для маршрутизации через AntiZapret VPN'
+	replace_known_ip_list_header \
+		"$config_dir/exclude-ips.txt" \
+		'# Исключение IP-адресов из маршрутизации через AntiZapret VPN' \
+		'# Исключение IPv4-адресов из маршрутизации через AntiZapret VPN' \
+		'# Исключение IPv4- и IPv6-адресов из маршрутизации через AntiZapret VPN'
+	replace_known_ip_list_header \
+		"$config_dir/forward-ips.txt" \
+		'# Добавление IP-адресов, неявно разрешённых для маршрутизации через AntiZapret VPN' \
+		'# Добавление IPv4-адресов неявно разрешённых для маршрутизации через AntiZapret VPN' \
+		'# Добавление IPv4- и IPv6-адресов, неявно разрешённых для маршрутизации через AntiZapret VPN'
+	replace_known_ip_list_header \
+		"$config_dir/drop-ips.txt" \
+		'# Добавление IP-адресов, запрещённых для форвардинга через AntiZapret VPN и полный VPN' \
+		'# Добавление IPv4-адресов запрещённых для форвардинга через AntiZapret VPN и полный VPN' \
+		'# Добавление IPv4- и IPv6-адресов, запрещённых для форвардинга через AntiZapret VPN и полный VPN'
+	replace_known_ip_list_header \
+		"$config_dir/allow-ips.txt" \
+		'# Исключение IP-адресов из проверки защиты от сканирования и сетевых атак' \
+		'# Исключение IPv4-адресов из проверки защиты от сканирования и сетевых атак' \
+		'# Исключение IPv4- и IPv6-адресов из проверки защиты от сканирования и сетевых атак'
+	replace_known_ip_list_header \
+		"$config_dir/deny-ips.txt" \
+		'# Добавление IP-адресов, заблокированных для входящих подключений к серверу' \
+		'# Добавление IPv4-адресов заблокированных для входящих подключений к серверу' \
+		'# Добавление IPv4- и IPv6-адресов, заблокированных для входящих подключений к серверу'
+}
+
 # Snapshot managed configuration and unit state before the maintenance window.
 # A fatal install error restores that snapshot and restarts the old stack.
 INSTALL_TRANSACTION_ROOT=
@@ -3318,6 +3368,7 @@ fi
 
 # Сохраняем пользовательские настройки и обработчики custom*.sh
 cp /root/antizapret/config/*.txt /tmp/antizapret/setup/root/antizapret/config/ || true
+normalize_preserved_ip_list_headers /tmp/antizapret/setup/root/antizapret/config
 cp /root/antizapret/custom*.sh /tmp/antizapret/setup/root/antizapret/ || true
 cp /etc/knot-resolver/*.lua /tmp/antizapret/setup/etc/knot-resolver/ || true
 
@@ -3364,6 +3415,7 @@ if [[ -d "$RESTORE_ROOT/wireguard" ]]; then
 fi
 if [[ -d "$RESTORE_ROOT/config" ]]; then
 	cp -a "$RESTORE_ROOT/config/." /tmp/antizapret/setup/root/antizapret/config/
+	normalize_preserved_ip_list_headers /tmp/antizapret/setup/root/antizapret/config
 fi
 if [[ -d "$RESTORE_ROOT/knot-resolver" ]]; then
 	cp -a "$RESTORE_ROOT/knot-resolver/." /tmp/antizapret/setup/etc/knot-resolver/
