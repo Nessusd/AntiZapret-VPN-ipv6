@@ -1,3 +1,4 @@
+# Публичные сборщики данных главной страницы панели.
 from .client_details import build_client_details_payload
 from .page_context import (
     build_client_table_rows,

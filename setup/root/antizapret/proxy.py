@@ -12,6 +12,7 @@ FAKE_IPV6_PREFIX_LENGTH = 96
 ALTERNATIVE_FAKE_IPV6_NETWORK = IPv6Network("2001:2::/48")
 
 
+# Диапазон Fake-IP должен совпадать с маршрутом, который установщик передаёт клиентам.
 def fake_ipv6_network(prefix, alternative=False):
     if alternative:
         return ALTERNATIVE_FAKE_IPV6_NETWORK
@@ -42,6 +43,8 @@ class FakeIPPool:
         return True
 
     def allocate(self):
+        # Освобождённые адреса используем первыми, чтобы не исчерпать большой,
+        # но всё же конечный пул при длительной работе процесса.
         if self.released:
             value = self.released.pop()
             self.used.add(value)
@@ -69,6 +72,8 @@ class ProxyResolver(BaseResolver):
             self.pools[6] = FakeIPPool(IPv6Network(ip6_range))
         self.ip_map = {}
         # Loading existing mappings
+        # Существующие DNAT-правила переживают перезапуск процесса, поэтому
+        # восстанавливаем их в памяти и проверяем принадлежность выбранным пулам.
         current_time = time.time()
         for family in self.pools:
             result = subprocess.run([self.iptables(family),"-w","-t","nat","-S",self.chain(family)],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,check=True,env=self._env)
@@ -128,6 +133,8 @@ class ProxyResolver(BaseResolver):
                 return None
             self.ip_map[real_ip] = {"fake_ip": fake_ip,"last_access": current_time}
         try:
+            # Правило публикуется только после резервирования адреса в памяти;
+            # при ошибке iptables резерв обязательно возвращается в пул.
             subprocess.run([self.iptables(family),"-w","-t","nat","-A",self.chain(family),"-d",fake_ip,"-j","DNAT","--to-destination",real_ip],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,env=self._env)
         except Exception as e:
             print(f"Error: {e} (real_ip={real_ip} fake_ip={fake_ip})")
@@ -173,6 +180,8 @@ class ProxyResolver(BaseResolver):
                     os._exit(1)
 
     def cleanup_fake_ips(self):
+        # Список удалений формируется под блокировкой, а пакетная правка firewall
+        # выполняется после неё, чтобы не задерживать параллельные DNS-запросы.
         with self.lock:
             current_time = time.time()
             cleanup_ips = []
@@ -206,6 +215,8 @@ class ProxyResolver(BaseResolver):
                 current_time = time.time()
                 qname = request.q.qname
                 is_smtp = qname.label and b'smtp' in qname.label[0]
+                # Для smtp сохраняем реальный адрес рядом с Fake-IP: это оставляет
+                # почтовому клиенту прямой вариант при блокировке исходящих SMTP.
                 for record in reply.rr:
                     if record.rtype != request.q.qtype:
                         new_rr.append(record)
@@ -232,6 +243,7 @@ class ProxyResolver(BaseResolver):
         return reply
 
 if __name__ == "__main__":
+    # UDP и TCP используют один resolver и, следовательно, единую таблицу соответствий.
     p = argparse.ArgumentParser(description="DNS Proxy")
     p.add_argument("--port",type=int,default=53,
                     metavar="<port>",

@@ -1,3 +1,4 @@
+# Хранит последний успешный снимок журнала и координирует его фоновое обновление.
 import json
 from datetime import datetime, timezone
 

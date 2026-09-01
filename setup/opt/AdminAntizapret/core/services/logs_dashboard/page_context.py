@@ -1,3 +1,4 @@
+# Подготавливает начальное состояние страницы журнала из кэша и фильтров.
 def build_logs_dashboard_page_context(
     dashboard_data,
     *,

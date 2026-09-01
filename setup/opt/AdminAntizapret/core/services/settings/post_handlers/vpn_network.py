@@ -1,3 +1,4 @@
+# Меняет только собственные сетевые параметры панели, не дублируя конфигурацию AntiZapret.
 import os
 import platform
 import subprocess

@@ -1,3 +1,4 @@
+# Применяет параметры Telegram-аутентификации и скрывает секреты в журнале изменений.
 import os
 
 from core.services.settings.telegram_normalize import (

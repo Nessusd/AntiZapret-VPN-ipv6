@@ -3,6 +3,8 @@
  * Toast API: notifications.js (window.showNotification, window.hideNotificationWithFx).
  */
 
+// Общие модальные подтверждения не дают разным страницам расходиться в обработке задач.
+
 function createUserActionConfirm() {
   const modal = document.getElementById("userActionModal");
   const titleEl = document.getElementById("userActionModalTitle");
@@ -222,6 +224,8 @@ function startSimulatedTaskProgress() {
 }
 
 async function pollBackgroundTask(taskId, options = {}) {
+  // Краткие сетевые сбои допускаются, но серия ошибок и общий timeout переводят
+  // задачу в явную ошибку вместо бесконечного ожидания интерфейса.
   const intervalMs = options.intervalMs || 3000;
   const timeoutMs = options.timeoutMs || 600000;
   const maxConsecutiveErrors = options.maxConsecutiveErrors ?? 3;
@@ -321,6 +325,7 @@ function resolveBackgroundTaskStage(task, fallbackTitle) {
 }
 
 async function pollBackgroundTaskWithProgress(taskId, options = {}) {
+  // Имитация прогресса используется только до первого реального процента сервера.
   const title = options.title || "Выполняется операция…";
   const useSimulated = options.simulated !== false;
   showTaskProgress(title);

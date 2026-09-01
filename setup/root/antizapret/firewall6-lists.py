@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Собирает IPv6-списки firewall и синхронизирует управляемые части OpenVPN CCD.
+# Пользовательские строки вне маркерных блоков всегда сохраняются.
 from __future__ import annotations
 
 import argparse
@@ -57,6 +59,8 @@ def fake_ipv6_network(
 
 
 def read_paths(paths: list[Path]) -> set[ipaddress.IPv6Network]:
+    # Общие списки могут содержать оба семейства адресов; здесь выбирается
+    # только IPv6, а повреждённые строки не останавливают штатное обновление.
     networks: set[ipaddress.IPv6Network] = set()
     for path in paths:
         try:
@@ -102,6 +106,8 @@ def write_file(destination: Path, networks: set[ipaddress.IPv6Network]) -> None:
 
 
 def replace_text(destination: Path, content: str) -> None:
+    # Символические ссылки не заменяем, чтобы управляемый путь не позволял
+    # записать данные за пределы ожидаемого каталога.
     if destination.is_symlink():
         raise RuntimeError(f"refusing to replace symlink {destination}")
     mode = 0o644
@@ -132,6 +138,8 @@ def write_openvpn_routes(
     enabled: bool = True,
     fake_network: ipaddress.IPv6Network | None = None,
 ) -> None:
+    # Пересоздаётся только блок между маркерами. Ручные директивы администратора
+    # до и после него остаются на своих местах.
     try:
         original = destination.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -188,6 +196,8 @@ def parse_client_prefix(value: str) -> ipaddress.IPv6Network:
 
 
 def strip_managed_sections(text: str) -> list[str]:
+    # Удаляем собственные секции перед повторной сборкой и считаем незакрытый
+    # маркер ошибкой, а не молча отбрасываем остаток пользовательского файла.
     sections = {
         OPENVPN_CLIENT_DEFAULT_BEGIN: OPENVPN_CLIENT_DEFAULT_END,
         OPENVPN_CLIENT_PREFIX_BEGIN: OPENVPN_CLIENT_PREFIX_END,
@@ -298,6 +308,7 @@ def managed_client_names() -> set[str]:
 def validate_unique_client_prefix(
     name: str, prefix: ipaddress.IPv6Network
 ) -> None:
+    # Пересекающиеся routed-префиксы сделали бы выбор OpenVPN iroute неоднозначным.
     for other_name in managed_client_names():
         if other_name == name:
             continue
@@ -324,6 +335,8 @@ def render_client_config(
     ipv6_enabled: bool,
     route_mode: str,
 ) -> str:
+    # ccd и ccd2 имеют разные обязанности: первый получает маршруты по умолчанию,
+    # второй — только адресный префикс клиента. Общая функция сохраняет их формат.
     try:
         original = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -450,6 +463,8 @@ def set_client_route_mode(name: str, mode: str) -> None:
 
 
 def sync_client_configs(*, ipv6_enabled: bool, bgp_enabled: bool = False) -> None:
+    # Сначала проверяем весь набор префиксов и только затем начинаем запись,
+    # чтобы конфликт одного клиента не оставил остальные файлы наполовину обновлёнными.
     names = managed_client_names()
     prefixes: dict[str, ipaddress.IPv6Network | None] = {}
     for name in names:
@@ -468,6 +483,8 @@ def sync_client_configs(*, ipv6_enabled: bool, bgp_enabled: bool = False) -> Non
 
 
 def downloaded_networks(refresh_download: bool) -> set[ipaddress.IPv6Network]:
+    # Кэш нужен для локальных запусков без нового download; при наличии свежих
+    # файлов он всегда пересобирается из фактически загруженного набора.
     download_paths = matching_paths(["download/*ips.txt", "download/*ips6.txt"])
     if refresh_download or download_paths:
         networks = read_paths(download_paths)
@@ -546,6 +563,8 @@ def main(argv: list[str]) -> int:
         return 0
 
     refresh_download = args.refresh_download
+    # Маршрутный список строится как загруженные и явно добавленные сети за
+    # вычетом исключений. Остальные списки используются отдельными цепочками.
     route = downloaded_networks(refresh_download) | read_networks(["config/*include-ips.txt"])
     route.difference_update(read_networks(["config/*exclude-ips.txt"]))
     fake_network = fake_ipv6_network(

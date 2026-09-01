@@ -1,3 +1,4 @@
+# Переэкспорт лимитов маршрутов сохраняет прежний путь импорта приложения.
 from core.services.cidr.constants import OPENVPN_ROUTE_TOTAL_CIDR_LIMIT_MAX_IOS
 from core.services.cidr.route_limits import (
     clamp_openvpn_route_total_cidr_limit,

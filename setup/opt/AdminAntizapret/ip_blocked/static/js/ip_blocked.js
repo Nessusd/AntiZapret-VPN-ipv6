@@ -1,3 +1,4 @@
+// Оживляет изолированную страницу блокировки, не обращаясь к API основной панели.
 (function () {
   const TOAST_DURATION = { success: 5000, info: 5000, warning: 5000, error: 10000 };
   const TOAST_MAX_VISIBLE = 5;

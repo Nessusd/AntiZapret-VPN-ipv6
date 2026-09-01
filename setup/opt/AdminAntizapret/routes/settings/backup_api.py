@@ -1,3 +1,4 @@
+# Адаптирует обработчики резервных копий страницы настроек к JSON API.
 from flask import jsonify, request, session
 
 from core.services.settings.post_handlers.maintenance import (

@@ -1,3 +1,4 @@
+# Собирает HTML и API маршруты всех разделов настроек.
 from .antizapret import register_settings_antizapret_routes
 from .api import register_settings_api_routes
 from .backup_api import register_backup_api_routes

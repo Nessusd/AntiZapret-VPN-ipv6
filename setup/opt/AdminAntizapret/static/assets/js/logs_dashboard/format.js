@@ -1,3 +1,4 @@
+// Общие форматтеры держат таблицы, карточки и графики в одной системе подписей.
 (function () {
   function parseProtocolTokens(rawValue) {
     return String(rawValue || "")

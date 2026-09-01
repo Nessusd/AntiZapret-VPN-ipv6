@@ -1,3 +1,4 @@
+# Управляет полным циклом резервных копий панели: составом, архивом, ротацией и восстановлением.
 import glob
 import json
 import os
@@ -154,6 +155,8 @@ class BackupManagerService:
         return ", ".join(parts) if parts else summary
 
     def create_backup(self, *, selected_components, trigger="manual"):
+        # Согласованные экспорты БД готовятся до упаковки и удаляются вместе с
+        # временным каталогом независимо от результата создания архива.
         os.makedirs(self.backup_root, exist_ok=True)
         components = self.normalize_components(selected_components)
         file_map, db_prepared, db_without_cidr = self._collect_component_files(components)
@@ -225,6 +228,7 @@ class BackupManagerService:
         }
 
     def resolve_backup_path(self, backup_name):
+        # Проверка commonpath не позволяет имени архива выйти за backup_root.
         raw = str(backup_name or "").strip()
         if not raw:
             raise ValueError("Не выбран файл бэкапа")
@@ -434,6 +438,7 @@ class BackupManagerService:
             raise RuntimeError(stderr or stdout or f"Ошибка команды: {' '.join(cmd)}")
 
     def _inspect_tar_summary(self, archive_path):
+        # Сводка строится по заголовкам архива без распаковки на файловую систему.
         items_count = 0
         components = set()
         try:

@@ -1,3 +1,4 @@
+# Показывает маршрутизацию с учётом фактического IPv6-режима AntiZapret.
 from core.services.antizapret_settings import (
     is_antizapret_ipv6_enabled,
     read_antizapret_settings,

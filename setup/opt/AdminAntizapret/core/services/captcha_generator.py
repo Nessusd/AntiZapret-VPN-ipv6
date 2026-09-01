@@ -1,3 +1,4 @@
+# Создаёт CAPTCHA и хранит только данные, необходимые для последующей проверки ответа.
 import io
 import random
 import string

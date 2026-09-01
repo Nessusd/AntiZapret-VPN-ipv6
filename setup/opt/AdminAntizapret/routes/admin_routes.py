@@ -1,3 +1,4 @@
+# Регистрирует административные API управления пользователями и правами на конфиги.
 import os
 
 from flask import jsonify, request, session

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Общая проверка отделяет подтверждённую Telegram-сессию от обычной Flask-сессии.
+
 from collections.abc import Mapping
 from typing import Any
 

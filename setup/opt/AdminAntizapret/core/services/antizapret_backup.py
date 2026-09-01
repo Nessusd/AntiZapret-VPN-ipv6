@@ -1,3 +1,4 @@
+# Определяет данные AntiZapret, которые можно безопасно включить в резервную копию панели.
 import glob
 import os
 import re

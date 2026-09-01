@@ -1,3 +1,4 @@
+# Проверяет и сохраняет параметры безопасной выдачи QR-конфигураций.
 import os
 
 from core.services.feature_toggles import app_module_disabled_message, is_app_module_enabled

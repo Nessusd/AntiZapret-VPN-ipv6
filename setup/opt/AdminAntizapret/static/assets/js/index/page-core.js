@@ -1,4 +1,5 @@
 /* exported getThemeColor, syncClientBlockedBadge, showQRModal, copyTextToClipboard, parseAccessExpiresAt, formatAccessRemaining, syncClientCardStats, syncAllClientCardStats, syncClientAccessMeta, applyWgAccessPayloadToRow, applyWgAccessPayloadToClientRows, applyOpenVpnAccessPayloadToClientRows */
+// Координирует главную таблицу клиентов и общие действия над VPN-профилями.
 // ============ INITIALIZATION ============
 document.addEventListener('DOMContentLoaded', function () {
     initializeUI();
@@ -159,6 +160,8 @@ function syncClientCardAccent(row) {
 }
 
 function syncClientCardStats(row, payload, options = {}) {
+    // Карточка обновляется на месте из общей модели и не требует перерисовки
+    // таблицы при каждом новом снимке трафика.
     if (!row) {
         return;
     }
@@ -908,6 +911,8 @@ function populateClientSelect(option) {
 let _isRefreshing = false;
 
 async function refreshMainContent() {
+    // Фрагменты заменяются из свежего HTML, после чего обработчики и кэш деталей
+    // инициализируются повторно для новых DOM-узлов.
     if (_isRefreshing) return;
     _isRefreshing = true;
     try {
@@ -1301,6 +1306,8 @@ function initializeClientBanToggles() {
 }
 
 async function updateClientBlockState(clientName, shouldBlock) {
+    // Переключатель считается оптимистичным только до ответа API; вызывающий код
+    // возвращает прежнее значение checkbox при любой ошибке.
     const csrfInput = document.getElementById('csrf-token-value');
     const csrfToken = csrfInput ? csrfInput.value : '';
 

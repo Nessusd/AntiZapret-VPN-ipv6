@@ -1,3 +1,4 @@
+# Выполняет входной redirect и запрещает кэширование страницы Mini App.
 from flask import make_response, redirect, render_template, session, url_for
 
 from tg_mini.session import enforce_telegram_mini_session

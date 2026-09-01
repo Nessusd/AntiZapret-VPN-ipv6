@@ -1,3 +1,4 @@
+# Управляет только cron-заданиями панели, сохраняя посторонние строки crontab.
 import glob
 import os
 import shlex
@@ -79,6 +80,8 @@ class MaintenanceSchedulerService:
         return [line.rstrip("\n") for line in result.stdout.splitlines()]
 
     def write_crontab_lines(self, lines):
+        # В метод приходит уже объединённый crontab: посторонние строки нельзя
+        # терять даже тогда, когда все задания панели отключены.
         payload = "\n".join(lines).strip()
         if payload:
             payload += "\n"
@@ -144,6 +147,7 @@ class MaintenanceSchedulerService:
             return False
 
     def ensure_traffic_sync_cron(self):
+        # Systemd timer имеет приоритет, cron остаётся fallback для установок без unit.
         lines = self.read_crontab_lines()
         if lines is None:
             return False, "Не удалось прочитать crontab для авто-синхронизации трафика."

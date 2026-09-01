@@ -1,3 +1,4 @@
+// Координирует фильтры страницы, polling метрик и WebSocket fallback.
 document.addEventListener("DOMContentLoaded", () => {
   const { ifaceGroups } = window.ServerMonitorIfaceGroups;
   const { initMiniCharts, loadSystemInfo, startWebSocket, METRICS_POLL_MS } = window.ServerMonitorSystemMetrics;

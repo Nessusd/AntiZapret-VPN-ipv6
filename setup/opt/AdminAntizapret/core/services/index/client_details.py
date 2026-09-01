@@ -1,3 +1,4 @@
+# Формирует детальную карточку только для клиента, видимого текущему пользователю.
 def _build_visible_client_name_lookup(visible_client_names):
     lookup = {}
     for raw_name in visible_client_names or []:

@@ -1,3 +1,4 @@
+# Собирает лёгкий снимок CPU, памяти, диска и uptime для polling интерфейса.
 import logging
 import os
 import platform

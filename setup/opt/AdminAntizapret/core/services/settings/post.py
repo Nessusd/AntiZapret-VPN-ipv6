@@ -1,3 +1,4 @@
+# Диспетчеризует POST формы настроек между независимыми обработчиками разделов.
 from core.services.settings.post_handlers.feature_toggles import handle_feature_toggles_settings
 from core.services.settings.post_handlers.maintenance import (
     handle_backup_create,

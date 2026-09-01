@@ -1,3 +1,4 @@
+// Применяет протокольный и stale-фильтры к карточкам без повторного запроса.
 (function () {
     const hideStaleToggle = document.getElementById('hideStaleSessionsToggle');
     const clientsProtocolFilter = document.getElementById('clientsProtocolFilter');

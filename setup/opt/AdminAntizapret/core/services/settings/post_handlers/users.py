@@ -1,3 +1,4 @@
+# Выполняет административные действия с пользователями через один валидируемый POST.
 import json as _json
 
 from core.services.feature_toggles import app_module_disabled_message, is_app_module_enabled

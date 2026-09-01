@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Готовит конфигурацию к безопасной отправке через Telegram без прямого URL.
+
 import hashlib
 import json
 import mimetypes
@@ -15,6 +17,7 @@ from flask import Request
 
 
 def run_io_bound(io_executor, callback: Callable, *, timeout: int):
+    # Сетевой вызов не должен занимать worker Flask; timeout ограничивает и очередь executor.
     if io_executor is None:
         return callback()
 
@@ -301,6 +304,8 @@ def send_document_via_telegram_bot(
     caption: str = "",
     telegram_filename: str = "",
 ) -> dict:
+    # multipart собирается локально, чтобы имя файла в Telegram не раскрывала
+    # абсолютный путь конфигурации на сервере.
     api_url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     filename = (telegram_filename or "").strip() or os.path.basename(file_path)
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"

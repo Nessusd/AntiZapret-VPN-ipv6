@@ -1,3 +1,4 @@
+# Нормализует Telegram, IP и cron-значения до сравнения и сохранения.
 import ipaddress
 import re
 

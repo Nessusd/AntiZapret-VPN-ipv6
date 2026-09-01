@@ -1,3 +1,4 @@
+// Объединяет vnStat нескольких VPN-интерфейсов в один переиспользуемый график.
 (function () {
   const { chartColors, chartTypography } = window.ServerMonitorChartTheme;
   const { fmtRate, fmtVolume, fmtVolumeFromBytes } = window.ServerMonitorFmt;
@@ -193,6 +194,8 @@
   }
 
   async function loadBandwidth(page) {
+    // Интерфейсы выбранной группы запрашиваются параллельно, а единицы и
+    // дневная агрегация применяются после суммирования временных точек.
     const elLoad = document.getElementById("network_load");
     const elIface = document.getElementById("bwIface");
     const elNetIf = document.getElementById("network_interface");

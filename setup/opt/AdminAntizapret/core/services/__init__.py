@@ -1,3 +1,4 @@
+# Единая точка импорта сервисов, которые собираются контейнером приложения.
 from .active_web_session import ActiveWebSessionService
 from .auth_manager import AuthenticationManager
 from .background_tasks import BackgroundTaskService

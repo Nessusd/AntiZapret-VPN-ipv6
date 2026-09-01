@@ -1,4 +1,5 @@
 /* exported buildLightDiff */
+// Строит компактный построчный diff для предпросмотра без внешней библиотеки.
 function splitLines(value) {
     if (!value) {
         return [];
@@ -114,6 +115,8 @@ function buildLightDiff(baseValue, currentValue) {
     const currentLines = splitLines(currentValue);
 
     const complexity = baseLines.length * currentLines.length;
+    // Квадратичный Myers ограничен по размеру; для больших списков важнее
+    // отзывчивость редактора, поэтому используется линейное сравнение по индексам.
     if (complexity > 220000) {
         return {
             mode: 'indexed',

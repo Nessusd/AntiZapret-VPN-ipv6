@@ -1,3 +1,4 @@
+// Собирает цвета графиков из CSS-темы для независимых модулей dashboard.
 (function () {
   const getThemeColor = (token, fallback) =>
     getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;

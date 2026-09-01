@@ -1,3 +1,4 @@
+# Публичная регистрация Telegram Mini App и её API.
 from tg_mini.blueprint import bp
 from tg_mini.routes.api_config import register_tg_mini_config_api_routes
 from tg_mini.routes.api_dashboard import register_tg_mini_dashboard_api_routes

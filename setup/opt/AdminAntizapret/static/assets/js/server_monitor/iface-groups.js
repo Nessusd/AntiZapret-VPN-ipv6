@@ -1,3 +1,4 @@
+// Объединяет серверные группы интерфейсов с fallback для старых установок.
 (function () {
   const defaultIfaceGroups = {
     vpn: ["vpn", "vpn-udp", "vpn-tcp"],

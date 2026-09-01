@@ -1,3 +1,4 @@
+// Синхронизирует вкладки dashboard, боковую навигацию, URL hash и localStorage.
 (function () {
     // Cache buster for stale dashboard script versions in aggressive browser caches.
     window.__logsDashboardClientScriptVersion = '2026-05-09-nav-tabs-sync-v1';

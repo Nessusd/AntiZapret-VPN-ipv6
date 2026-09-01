@@ -1,3 +1,4 @@
+# Собирает настройки, аудит и доступность модулей в единый контекст страницы.
 import os
 from datetime import datetime, timedelta, timezone
 

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Удаление начинается с резервной копии и трогает только ресурсы, которыми
+# владеет панель или которые однозначно распознаны по управляемым маркерам.
 uninstall() {
     printf "\n"
     _m_top
@@ -23,6 +25,8 @@ uninstall() {
             awk '{print $1}'
     )
     if [ "${#restore_units[@]}" -gt 0 ]; then
+        # Активное восстановление может менять БД и файлы; его необходимо
+        # остановить до создания последнего согласованного бэкапа.
         ui_info "Остановка активного восстановления перед резервным копированием..."
         if ! systemctl stop "${restore_units[@]}"; then
             ui_fail "Не удалось безопасно остановить восстановление панели"
@@ -97,6 +101,8 @@ uninstall() {
                 local nginx_config="/etc/nginx/sites-available/$conf"
                 local nginx_enabled="/etc/nginx/sites-enabled/$conf"
                 local nginx_owned=false
+                # Пользовательский virtual host удалять нельзя. Старые установки
+                # распознаются по полному набору ожидаемых директив.
                 if grep -Fxq '# Managed by AntiZapret integrated installer' "$nginx_config" 2>/dev/null; then
                     nginx_owned=true
                 elif [ -f "$nginx_config" ] && [ ! -L "$nginx_config" ] && \

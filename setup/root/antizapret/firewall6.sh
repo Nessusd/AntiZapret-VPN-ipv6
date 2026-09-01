@@ -29,6 +29,8 @@ if [[ -z "$DEFAULT_INTERFACE6" ]]; then
 fi
 PUBLIC_INTERFACE6="${DEFAULT_INTERFACE6:-${DEFAULT_INTERFACE:-}}"
 
+# Для WARP важен фактически поднятый глобальный адрес: одно только наличие
+# интерфейса ещё не означает, что через него можно выполнять NAT66.
 active_warp_ipv6_address() {
 	local interface=$1
 	ip link show dev "$interface" &>/dev/null || return 1
@@ -77,6 +79,9 @@ POSTROUTING_CHAIN=ANTIZAPRET6-POSTROUTING
 MAPPING_CHAIN=ANTIZAPRET6-MAPPING
 ANTIZAPRET_MARK=0x10000000/0x30000000
 VPN_MARK=0x20000000/0x30000000
+
+# Fake-IP диапазон и адреса DNS-шлюзов вычисляются из одного /48, чтобы
+# firewall, прокси и конфигурации клиентов использовали одинаковую схему.
 FAKE_IPV6_NETWORK="$(python3 - "${VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}" "${ALTERNATIVE_FAKE_IPV6:-y}" <<'PY'
 import ipaddress
 import sys
@@ -129,6 +134,7 @@ delete_chain() {
 }
 
 firewall_down() {
+	# Удаление допускает частично собранное состояние после аварийного запуска.
 	set +e
 	remove_jump filter INPUT "$INPUT_CHAIN"
 	remove_jump filter FORWARD "$FORWARD_CHAIN"
@@ -150,6 +156,8 @@ firewall_down() {
 }
 
 load_set() {
+	# Наполняем временный ipset и меняем его местами с рабочим, не оставляя окно
+	# с пустым набором во время обновления маршрутов.
 	local live=$1 file=$2 temporary="${1}-new"
 	ipset create "$live" hash:net family inet6 -exist
 	ipset destroy "$temporary" 2>/dev/null || true
@@ -207,6 +215,7 @@ warn_without_global_ipv6() {
 source "$ROOT_DIR/firewall6-protection.sh"
 source "$ROOT_DIR/firewall6-apply.sh"
 
+# Один entrypoint обслуживает полную сборку, снятие правил и замену только списков.
 case "${1:-up}" in
 	up)
 		[[ "$DISABLE_IPV6" == 'y' ]] && firewall_down || firewall_up "${2:-auto}"

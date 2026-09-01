@@ -1,3 +1,4 @@
+// Строит обзорные графики из bootstrap-снимка, подготовленного сервером.
 (function () {
     const logsBootstrap = window.__logsDashboardBootstrap || {};
     if (!logsBootstrap.openvpnLoggingEnabled) {
@@ -96,6 +97,8 @@
     let overviewChartsReady = false;
 
     function initOverviewCharts() {
+        // Все диаграммы строятся из одного snapshot, поэтому их суммы относятся
+        // к одинаковому моменту сбора серверных данных.
         if (overviewChartsReady) {
             return;
         }

@@ -1,3 +1,4 @@
+# Сводит срок доступа, ручную блокировку и лимит трафика в runtime-политику WG/AWG.
 from datetime import datetime, timedelta, timezone
 
 from core.services.time_utils import as_utc
@@ -39,6 +40,8 @@ class WgAccessPolicyService:
         self.get_consumed_traffic_bytes = get_consumed_traffic_bytes or (lambda _client_name: 0)
 
     def _apply_client_runtime(self, client_name, *, is_blocked):
+        # Subprocess-режим изолирует изменение интерфейсов от web-процесса;
+        # внедрённый enforcer остаётся доступен для фоновых задач и проверок.
         if self.use_subprocess_runtime:
             from utils.wg_runtime_subprocess import apply_wg_client_runtime
 
@@ -234,6 +237,8 @@ class WgAccessPolicyService:
             return None
 
     def _resolve_effective_state(self, row, now=None):
+        # Причины имеют явный приоритет, чтобы UI, аудит и runtime одинаково
+        # объясняли одновременное истечение срока и превышение лимита.
         now = as_utc(now) or self._now()
         expires_at = as_utc(row.expires_at)
         block_until = as_utc(row.block_until)
@@ -315,6 +320,8 @@ class WgAccessPolicyService:
             is_blocked = bool(state["is_blocked"])
             runtime_result = self._apply_client_runtime(normalized, is_blocked=is_blocked)
             if not is_blocked:
+                # WireGuard syncconf может вернуть peer в исходное состояние;
+                # после разблокировки повторно применяем все остальные запреты.
                 reapplied_blocked = self._reapply_all_blocked_runtime()
 
         return {

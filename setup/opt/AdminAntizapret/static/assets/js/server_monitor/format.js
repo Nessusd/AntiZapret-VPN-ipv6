@@ -1,3 +1,4 @@
+// Форматирует скорости и объёмы одинаково во всех карточках мониторинга.
 (function () {
   function fmtRate(val) {
     const v = Number(val) || 0;

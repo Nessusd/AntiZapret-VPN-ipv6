@@ -1,3 +1,4 @@
+// Сортирует отображённые строки трафика, сохраняя состояние фильтров таблицы.
 (function () {
     const table = document.getElementById('persistedTrafficTable');
     const sortBtn = document.getElementById('sortByTotalTraffic');

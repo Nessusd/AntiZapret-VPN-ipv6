@@ -1,3 +1,4 @@
+// Управляет модальным окном клиента и его отдельным графиком трафика.
 (function () {
     const modal = document.getElementById('clientDetailsModal');
     if (!modal) {
@@ -65,6 +66,8 @@
     }
 
     async function loadClientModalChart() {
+        // Имя клиента хранится в состоянии окна, чтобы смена карточки не смешала
+        // подписи и данные двух последовательных запросов.
         if (!currentClientName || !modalChartCanvas || !modalTrafficMeta) {
             return;
         }

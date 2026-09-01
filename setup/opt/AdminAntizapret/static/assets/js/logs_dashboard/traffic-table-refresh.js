@@ -1,3 +1,4 @@
+// Обновляет активные фрагменты dashboard, не сбрасывая состояние остальных вкладок.
 (function () {
     const refreshIntervalMs = 60000;
     const trafficPaneSelector = '.logs-tab-pane[data-tab-pane="traffic"]';
@@ -16,6 +17,8 @@
     }
 
     async function refreshDashboardFragments() {
+        // Загруженный документ служит только источником DOM-фрагментов;
+        // обработчики и локальное состояние текущей страницы сохраняются.
         if (document.visibilityState !== 'visible') {
             return;
         }

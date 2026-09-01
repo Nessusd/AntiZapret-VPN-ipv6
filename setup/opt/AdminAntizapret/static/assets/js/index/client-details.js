@@ -1,4 +1,5 @@
 /* exported getIndexClientDetailsPayload, initializeClientDetailsModal, initializeIndexTrafficMiniSummary, indexClientDetailsCache, indexClientDetailsFetchPromise */
+// Загружает общую модель клиентов один раз и использует её в карточках, модальном окне и графиках.
 let indexClientDetailsCache = null;
 let indexClientDetailsFetchPromise = null;
 
@@ -39,6 +40,8 @@ function hasClientDetailsData(payload) {
 }
 
 async function loadIndexClientDetailsPayload(force = false) {
+    // Общий Promise устраняет параллельные одинаковые запросы при одновременной
+    // инициализации карточек и краткой сводки трафика.
     if (!force && hasClientDetailsData(indexClientDetailsCache)) {
         return indexClientDetailsCache;
     }
@@ -555,6 +558,8 @@ function initializeClientDetailsModal() {
     }
 
     async function updateWgClientAccess(clientName, action, options = null) {
+        // Все варианты действия сводятся к одному FormData-контракту, после чего
+        // ответ сервера становится единственным источником нового состояния UI.
         const csrfInput = document.getElementById('csrf-token-value');
         const csrfToken = csrfInput ? csrfInput.value : '';
         const formData = new FormData();
@@ -2370,6 +2375,8 @@ function initializeClientDetailsModal() {
     }
 
     async function loadTrafficChart() {
+        // График загружается по текущему имени и периоду только после открытия
+        // окна, чтобы скрытые карточки не создавали сетевую нагрузку.
         if (!currentClientName || !modalTrafficMeta || !modalChartCanvas) {
             return;
         }
@@ -2537,6 +2544,8 @@ function initializeClientDetailsModal() {
     }
 
     async function openModal(clientName) {
+        // Сначала показывается оболочка с loading-состоянием, затем единый payload
+        // заполняет summary, подключения и ограничения одного клиента.
         const name = String(clientName || '').trim();
         if (!name) {
             showNotification('Не удалось определить имя клиента', 'error');

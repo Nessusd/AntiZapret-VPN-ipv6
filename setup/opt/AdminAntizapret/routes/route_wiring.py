@@ -1,3 +1,4 @@
+# Центральная точка регистрации маршрутов явно передаёт каждому модулю его зависимости.
 from routes.admin_routes import register_admin_routes
 from routes.routing import register_routing_routes
 from routes.auth_routes import register_auth_routes

@@ -1,3 +1,4 @@
+# Читает management socket OpenVPN с лимитами времени и размера, затем использует log fallback.
 import os
 import re
 import socket
@@ -33,6 +34,8 @@ class OpenVPNSocketReaderService:
         return os.path.join(self.openvpn_socket_dir, f"{profile_key}.sock")
 
     def query_openvpn_management_socket(self, socket_path, command, max_response_bytes=0):
+        # Ограничения timeout и размера защищают polling панели от зависшего или
+        # слишком многословного management socket.
         if not socket_path or not os.path.exists(socket_path):
             return ""
 
@@ -207,6 +210,8 @@ class OpenVPNSocketReaderService:
         }
 
     def read_status_source(self, profile_key, fallback_path):
+        # Живой socket точнее status-файла; fallback нужен во время перезапуска
+        # OpenVPN и для старых конфигураций без management interface.
         socket_path = self.openvpn_socket_path(profile_key)
         raw_mgmt = self.query_openvpn_management_socket(socket_path, "status 3")
         payload = self.extract_status_payload_from_management(raw_mgmt)

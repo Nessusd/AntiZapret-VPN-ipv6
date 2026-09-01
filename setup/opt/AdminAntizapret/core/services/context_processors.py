@@ -1,3 +1,4 @@
+# Добавляет текущего пользователя в шаблоны, не заставляя каждый route повторять запрос к БД.
 def register_current_user_context_processor(app, session_obj, user_model):
     @app.context_processor
     def inject_current_user():

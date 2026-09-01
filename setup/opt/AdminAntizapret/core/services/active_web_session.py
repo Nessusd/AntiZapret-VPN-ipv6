@@ -1,3 +1,4 @@
+# Хранит серверное состояние активных веб-сессий и их heartbeat без доверия к cookie.
 import secrets
 import time
 from datetime import datetime, timedelta, timezone

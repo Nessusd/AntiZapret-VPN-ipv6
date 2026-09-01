@@ -65,6 +65,8 @@ def server_address(prefix: str, mode: str) -> ipaddress.IPv6Interface:
 
 
 def client_address(prefix: str, mode: str, ipv4: str) -> ipaddress.IPv6Interface:
+    # Последний октет IPv4 используется как стабильный номер узла, поэтому
+    # повторная миграция выдаёт клиенту тот же IPv6 без отдельного реестра.
     try:
         address = ipaddress.IPv4Address(ipv4)
     except ipaddress.AddressValueError as exc:
@@ -110,6 +112,8 @@ def replace_addresses(line: str, addresses: Sequence[str]) -> str:
 
 
 def migrate_text(text: str, prefix: str, mode: str) -> tuple[str, int]:
+    # Конфиг разбирается по секциям без его переформатирования. При наличии
+    # неизвестного IPv6 миграция останавливается, чтобы не затереть ручную схему.
     expected_server = server_address(prefix, mode)
     lines = text.splitlines(keepends=True)
     section: str | None = None
@@ -203,6 +207,8 @@ def migrate_text(text: str, prefix: str, mode: str) -> tuple[str, int]:
 
 
 def strip_text(text: str, prefix: str, mode: str) -> tuple[str, int]:
+    # Обратная операция удаляет только детерминированные адреса AntiZapret;
+    # любые посторонние значения остаются без изменений.
     expected_server = server_address(prefix, mode)
     lines = text.splitlines(keepends=True)
     section: str | None = None
@@ -252,6 +258,8 @@ def strip_text(text: str, prefix: str, mode: str) -> tuple[str, int]:
 
 
 def atomic_write(path: Path, content: str) -> None:
+    # fsync файла и каталога делает замену устойчивой к аварийному завершению
+    # после rename, а права берутся с исходной конфигурации.
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )

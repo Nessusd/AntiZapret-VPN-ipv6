@@ -1,3 +1,4 @@
+// Единое состояние Mini App связывает dashboard, управление клиентами и доставку конфигов.
 document.addEventListener("DOMContentLoaded", function () {
     const appRoot = document.getElementById("tgMiniApp");
     if (!appRoot) {
@@ -5,6 +6,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     const state = {
+        // Серверные данные и пользовательские фильтры разделены, чтобы повторный
+        // fetch не сбрасывал выбранную вкладку, клиента и диапазон.
         dashboard: null,
         selectedRange: "1d",
         selectedClient: "",
@@ -1022,6 +1025,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     async function sendConfigToTelegram(downloadUrl) {
+        // Сервер получает внутренний URL и сам проверяет право пользователя;
+        // Mini App не скачивает секретный конфиг в память браузера.
         const csrfToken = getCsrfToken();
         return requestJson("/api/tg-mini/send-config", {
             method: "POST",
@@ -1077,6 +1082,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     async function pollTask(taskId, statusElement, successMessage) {
+        // Mini App имеет собственный компактный polling, но тот же конечный
+        // контракт completed/failed, что и полная web-панель.
         const started = Date.now();
         const timeoutMs = 15 * 60 * 1000;
 

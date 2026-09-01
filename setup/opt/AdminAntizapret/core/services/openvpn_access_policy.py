@@ -1,3 +1,4 @@
+# Преобразует сроки, ручные блокировки и лимиты трафика в состояние OpenVPN banlist.
 from datetime import datetime, timedelta, timezone
 
 from core.services.time_utils import as_utc
@@ -230,6 +231,8 @@ class OpenVpnAccessPolicyService:
         return changed
 
     def _sync_banlist_from_policy(self, *, traffic_limit_changed_clients=None):
+        # Полный желаемый набор вычисляется до записи banlist, чтобы частичная
+        # синхронизация одного клиента не изменила состояние остальных.
         self.ensure_client_connect_ban_check_block()
         now = self._now()
         rows = self.policy_model.query.all()
@@ -274,6 +277,8 @@ class OpenVpnAccessPolicyService:
         return {"row": row, "state": self._resolve_effective_state(row)}
 
     def reconcile_all(self):
+        # Старые записи banlist импортируются в модель до общей пересборки,
+        # сохраняя ручные блокировки после обновления панели.
         banlist_clients = self.read_banned_clients() or set()
         changed = False
         for client_name in sorted(banlist_clients):

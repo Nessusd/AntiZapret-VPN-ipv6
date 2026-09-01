@@ -1,3 +1,4 @@
+// Разделяет сохранение настроек AntiZapret и их применение через doall.
 document.addEventListener("DOMContentLoaded", () => {
   const root = document.getElementById("antizapret-config");
   if (!root) return;
@@ -131,6 +132,8 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const loadSettings = async () => {
+    // Схема кэшируется, а значения читаются заново. Поля установщика остаются
+    // видимыми, но недоступными для записи из панели.
     try {
       if (!schema.length) {
         const schemaPayload = await fetchJson("/antizapret_settings_schema", { cache: "no-store" });
@@ -188,6 +191,8 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const saveSettings = async ({ apply = false } = {}) => {
+    // API получает только редактируемые поля схемы. needsApply отделяет запись
+    // setup от фактической пересборки правил через doall.
     if (!schema.length) await loadSettings();
     if (!schema.length) return;
     const values = {};

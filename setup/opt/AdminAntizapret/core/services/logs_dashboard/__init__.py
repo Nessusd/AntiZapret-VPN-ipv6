@@ -1,3 +1,4 @@
+# Публичный интерфейс данных и фонового кэша журнала подключений.
 from .cache import LogsDashboardCacheService
 from .collector import collect_logs_dashboard_data
 from .page_context import build_logs_dashboard_page_context

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# CLI запускает обновление CIDR тем же сервисом, который использует панель.
 import argparse
 import json
 import os

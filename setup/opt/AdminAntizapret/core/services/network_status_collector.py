@@ -1,3 +1,4 @@
+# Собирает живое состояние OpenVPN/WireGuard и связывает его с именами клиентов.
 from collections import Counter
 from datetime import datetime, timezone
 import os
@@ -142,6 +143,8 @@ class NetworkStatusCollectorService:
         return rows
 
     def sync_wireguard_peer_cache_from_configs(self, force=False):
+        # Файлы конфигурации читаются с ограниченной частотой: имена peer меняются
+        # редко, а live-счётчики собираются значительно чаще.
         now_ts = int(time.time())
         if (
             not force
@@ -231,6 +234,8 @@ class NetworkStatusCollectorService:
         return max(int(time.time()) - handshake_ts, 0) <= self.wireguard_active_handshake_seconds
 
     def collect_wireguard_status_rows(self):
+        # wg сообщает ключи и endpoints, а человекочитаемые имена восстанавливаются
+        # по кэшу конфигураций перед объединением с OpenVPN.
         status_rows = {
             "antizapret": {
                 "profile": "antizapret-wg",
@@ -454,6 +459,8 @@ class NetworkStatusCollectorService:
         return rows
 
     def parse_status_log(self, profile_key, filename):
+        # Management socket предпочтителен, но тот же парсер принимает файловый
+        # fallback старых установок и помечает фактический источник данных.
         source = self.read_status_source(profile_key, filename)
         raw = source.get("raw", "")
         meta = self.profile_meta(profile_key)
@@ -590,6 +597,7 @@ class NetworkStatusCollectorService:
         }
 
     def parse_event_log(self, profile_key, filename):
+        # События дополняют snapshot историей сессий, не подменяя свежие live-счётчики.
         source = self.read_event_source(profile_key, filename)
         raw = source.get("raw", "")
         meta = self.profile_meta(profile_key)

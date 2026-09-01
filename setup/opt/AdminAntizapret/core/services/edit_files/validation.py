@@ -1,3 +1,4 @@
+# Проверка содержимого делегируется валидатору соответствующего типа списка.
 def validate_editor_content(content) -> tuple[bool, str]:
     value = content or ""
     if "\x00" in value:

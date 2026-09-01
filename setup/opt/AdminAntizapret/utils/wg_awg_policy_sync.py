@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Периодический CLI приводит runtime WG/AWG к сохранённым политикам доступа.
 import logging
 import os
 import sys

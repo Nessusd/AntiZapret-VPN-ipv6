@@ -1,3 +1,4 @@
+# Изолирует вызовы runtime-скриптов WG/AWG и приводит JSON-ответы к Python-ошибкам.
 import json
 import os
 import subprocess

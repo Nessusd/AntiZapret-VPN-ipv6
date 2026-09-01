@@ -100,6 +100,8 @@ IPV6_LISTS_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/ma
 
 PROXY=https://api.codetabs.com/v1/proxy?quest=
 
+# Загрузка всегда идёт во временный файл. Основной путь заменяется только после
+# успешного ответа и, когда доступно, проверки Content-Length.
 function download {
 	local path="${1}"
 	local tmp_path="${path}.tmp"
@@ -138,6 +140,8 @@ download $DOALL_PATH $DOALL_LINK
 
 source setup
 
+# Доменные источники обновляются отдельно от IP-источников, чтобы параметры
+# ip/host могли сократить работу ручного или автоматического запуска.
 if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" == 'noclean' ]]; then
 	download $DOMAIN_PATH $DOMAIN_LINK
 	( download $DOMAIN2_PATH $DOMAIN2_LINK ) || true
@@ -165,6 +169,8 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	fi
 fi
 
+# Дополнительные сети скачиваются только для включённых провайдеров; IPv6-файл
+# запрашивается вместе с соответствующим IPv4-источником.
 if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == 'noclean' ]]; then
 	if [[ "$DISCORD_INCLUDE" == 'y' ]]; then
 		download $DISCORD_IPS_PATH $DISCORD_IPS_LINK
@@ -221,6 +227,7 @@ if [[ -z "$1" || "$1" == 'ip' || "$1" == 'ips' || "$1" == 'noclear' || "$1" == '
 	fi
 fi
 
+# Локальный hook выполняется последним и может дополнить уже загруженный набор.
 ./custom-update.sh "$1" || true
 
 exit 0

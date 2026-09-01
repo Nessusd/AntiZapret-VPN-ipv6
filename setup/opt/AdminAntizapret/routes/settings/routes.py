@@ -1,3 +1,4 @@
+# Регистрирует страницу настроек и передаёт POST единому диспетчеру разделов.
 from flask import flash, redirect, render_template, request, session, url_for
 
 from core.services.settings.page_context import build_settings_page_context

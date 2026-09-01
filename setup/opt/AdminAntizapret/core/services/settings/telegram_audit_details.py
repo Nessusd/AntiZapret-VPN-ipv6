@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Формирует безопасное описание изменений Telegram без токенов и лишних данных формы.
+
 
 def _safe_token(value: str | None, fallback: str = "-") -> str:
     cleaned = str(value or "").strip()

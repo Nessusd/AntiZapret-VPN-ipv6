@@ -1,3 +1,4 @@
+# Публичные функции раздела редактирования управляемых файлов.
 from .file_groups import resolve_file_nav_group
 from .editor_metadata import GROUP_ORDER, get_editor_subtitle
 from .page_context import build_edit_files_get_context

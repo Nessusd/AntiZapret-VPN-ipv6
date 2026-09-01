@@ -1,3 +1,4 @@
+# Объединяет VPN-конфиги, сроки доступа, блокировки и трафик в модель главной страницы.
 import os
 import re
 from collections import OrderedDict

@@ -50,6 +50,8 @@ BIRD = os.environ.get("ANTIZAPRET_BIRD", "/usr/sbin/bird")
 BIRDC = os.environ.get("ANTIZAPRET_BIRDC", "/usr/sbin/birdc")
 
 
+# setup — shell-файл, поэтому разбираем только простые безопасные присваивания,
+# не выполняя его содержимое с правами процесса обновления.
 def read_setup(path: Path) -> dict[str, str]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -147,6 +149,8 @@ def route_include(networks: set[ipaddress._BaseNetwork]) -> str:
     return "".join(f"    route {network.with_prefixlen} blackhole;\n" for network in ordered(networks))
 
 
+# Каждый включённый VPN-транспорт получает отдельную пассивную BGP-сессию.
+# IPv6-канал добавляется только при включённом IPv6 во всей установке.
 def protocol_config(
     name: str,
     interface: str,
@@ -271,6 +275,7 @@ include \"{routes4_path}\";
 
 
 def atomic_write(path: Path, content: str, mode: int = 0o644) -> None:
+    # BIRD не должен увидеть частично записанную конфигурацию или список маршрутов.
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
@@ -337,6 +342,8 @@ def remove_generation(path: Path) -> None:
 
 
 def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
+    # Блокировка объединяет проверку и публикацию в одну транзакцию: параллельный
+    # update не сможет заменить current между валидацией и reload BIRD.
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(STATE_DIR, 0o755)
     generations = STATE_DIR / "generations"
@@ -384,6 +391,8 @@ def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
             atomic_write(candidate, candidate_text)
             validate_config(candidate)
 
+            # Хеш строится с постоянными путями current, чтобы имя временного
+            # каталога поколения не превращало неизменную конфигурацию в новую.
             stable_text, _, _ = render_config(
                 config, STATE_DIR / "current/routes4.conf", STATE_DIR / "current/routes6.conf"
             )
@@ -427,6 +436,8 @@ def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
                 remove_generation(generation)
                 return "unchanged"
 
+            # Сначала переключаем атомарную ссылку и основной конфиг, затем
+            # проверяем уже опубликованное состояние. При ошибке возвращаем оба.
             target = str(generation.relative_to(STATE_DIR))
             replace_symlink(current, target)
             atomic_write(CONFIG_PATH, stable_text)

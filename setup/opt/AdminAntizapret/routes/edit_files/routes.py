@@ -1,3 +1,4 @@
+# Связывает UI редактора с проверкой прав, валидацией и безопасной записью.
 from flask import jsonify, render_template, request, session, url_for
 
 from core.services.edit_files import (

@@ -1,3 +1,4 @@
+// Управляет навигацией редактора, dirty-состоянием форм и предпросмотром изменений.
 function safeTrim(value) {
     return (value || '').trim();
 }
@@ -138,6 +139,8 @@ function updateFormCounters(form) {
 }
 
 function setDirtyState(form, isDirty) {
+    // Состояние хранится рядом с исходным текстом формы и одновременно отражается
+    // в редакторе и боковой навигации.
     const meta = formMeta.get(form);
     if (!meta) {
         return;
@@ -262,6 +265,8 @@ editForms.forEach((form) => {
     });
 
     function updateDiffView() {
+        // Diff вычисляется только для активной формы и строится относительно
+        // значения, полученного от сервера при загрузке страницы.
         const currentMeta = formMeta.get(form);
         if (!currentMeta) {
             return;

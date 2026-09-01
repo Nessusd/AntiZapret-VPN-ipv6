@@ -1,3 +1,4 @@
+# Создаёт сервисы и явно передаёт зависимости вместо скрытых глобальных импортов.
 import sys
 
 from .active_web_session import ActiveWebSessionService

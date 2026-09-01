@@ -1,3 +1,4 @@
+# Регистрирует страницу журнала и административные действия очистки статистики.
 from flask import redirect, render_template, request, session, url_for
 
 from core.services.logs_dashboard import build_logs_dashboard_page_context

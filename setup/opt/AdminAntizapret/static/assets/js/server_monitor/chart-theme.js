@@ -1,3 +1,4 @@
+// Цвета Chart.js берутся из активной CSS-темы, а не дублируются в графиках.
 (function () {
   const getThemeColor = (token, fallback) =>
     getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;

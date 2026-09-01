@@ -1,3 +1,4 @@
+# Сопоставляет тип файла с устойчивой группой навигации редактора.
 def resolve_file_nav_group(file_type: str) -> str:
     if file_type in ("include_hosts", "exclude_hosts", "remove-hosts"):
         return "Домены"

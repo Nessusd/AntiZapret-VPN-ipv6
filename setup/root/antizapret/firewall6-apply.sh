@@ -1,5 +1,7 @@
 firewall_up() {
 	local list_mode="${1:-auto}"
+	# Пересборка начинается с известного пустого состояния, а списки ipset
+	# готовятся до подключения пользовательских цепочек к системным.
 	firewall_down
 	refresh_sets "$list_mode"
 
@@ -47,6 +49,8 @@ firewall_up() {
 	fi
 
 	if [[ "${TORRENT_GUARD:-n}" == 'y' ]]; then
+		# Краткоживущий набор запоминает адрес клиента после обнаружения сигнатуры,
+		# чтобы блокировать последующие пакеты того же соединения без повторного поиска.
 		ipset create antizapret-torrent6 hash:ip family inet6 timeout 60 -exist
 		ipset flush antizapret-torrent6
 		ip6t -t filter -A "$FORWARD_CHAIN" -i "$VPN_IPV6_IN_INTERFACE" -p tcp -m string --string 'GET ' --algo kmp --to 100 -m string --string 'info_hash=' --algo bm -m string --string 'peer_id=' --algo bm -m string --string 'port=' --algo bm -j SET --add-set antizapret-torrent6 src --exist
@@ -86,6 +90,8 @@ firewall_up() {
 		redirect_ports udp 52080:51080 52443:51443
 	fi
 
+	# Метка выбирает независимый внешний канал для AntiZapret и полного VPN;
+	# NAT66 применяется в самом конце после классификации входящего трафика.
 	add_nat66 "$ANTIZAPRET_MARK" "$ANTIZAPRET_IPV6_OUT_INTERFACE" "$ANTIZAPRET_IPV6_OUT_IP"
 	add_nat66 "$VPN_MARK" "$VPN_IPV6_OUT_INTERFACE" "$VPN_IPV6_OUT_IP"
 	warn_without_global_ipv6 "$ANTIZAPRET_IPV6_OUT_INTERFACE"

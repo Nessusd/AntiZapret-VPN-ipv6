@@ -1,3 +1,4 @@
+# Кэширует пользователя на время запроса и не доверяет данным роли из Flask session.
 from flask import g, session
 
 

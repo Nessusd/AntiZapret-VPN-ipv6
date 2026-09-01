@@ -4,6 +4,8 @@ set -e
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 CHAIN=ANTIZAPRET-BGP
 
+# Сначала удаляем все старые привязки цепочки: повторный запуск должен давать
+# тот же набор правил и не накапливать переходы в INPUT.
 remove_rules() {
 	while iptables -w -C INPUT -p tcp --dport 179 -j "$CHAIN" &>/dev/null; do
 		iptables -w -D INPUT -p tcp --dport 179 -j "$CHAIN"
@@ -33,6 +35,8 @@ source "$ROOT_DIR/setup"
 [[ "${BGP_ENABLE:-n}" == 'y' ]] || exit 0
 [[ "${ALTERNATIVE_CLIENT_IP:-n}" == 'y' ]] && IP=172 || IP=10
 
+# BGP разрешён только из подсетей включённых VPN-транспортов. Остальные
+# подключения к TCP/179 отбрасываются отдельной цепочкой.
 remove_rules
 iptables -w -N "$CHAIN"
 if [[ "${OPENVPN_UDP_ENABLE:-n}" == 'y' ]]; then

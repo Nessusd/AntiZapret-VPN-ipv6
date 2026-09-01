@@ -1,3 +1,4 @@
+# Объединяет парольную, Telegram и Mini App аутентификацию с общей политикой сессии.
 import secrets
 import time
 import hashlib
@@ -79,6 +80,7 @@ def register_auth_routes(
         return bool(_get_telegram_bot_username() and _get_telegram_bot_token())
 
     def _safe_internal_next_url(raw_next_url: str, default_endpoint: str = "tg_mini_app") -> str:
+        # Разрешены только абсолютные пути внутри сайта: схема, host и // создали бы open redirect.
         value = (raw_next_url or "").strip()
         if not value:
             return url_for(default_endpoint)
@@ -93,6 +95,8 @@ def register_auth_routes(
         return value
 
     def _verify_telegram_auth(payload: dict[str, str]) -> tuple[bool, str | None]:
+        # Подпись сравнивается в постоянное время, а auth_date ограничивает срок
+        # повторного использования перехваченного Telegram payload.
         bot_token = _get_telegram_bot_token()
         if not bot_token:
             return False, "Telegram авторизация не настроена (нет токена бота)."
@@ -143,6 +147,8 @@ def register_auth_routes(
         telegram_username: str = "",
         telegram_display_name: str = "",
     ) -> None:
+        # При каждом входе выдаётся новый серверный идентификатор сессии; признаки
+        # Mini App очищаются при обычном web-login и не перетекают между режимами.
         session["username"] = user.username
         session["user_role"] = user.role
         session["auth_sid"] = secrets.token_hex(16)
@@ -303,6 +309,8 @@ def register_auth_routes(
     @app.route("/auth/telegram-mini", methods=["POST"])
     @_limit("30 per minute;300 per hour")
     def auth_telegram_mini():
+        # initData проверяется отдельно от Login Widget: у Mini App другой формат
+        # подписи и собственный срок действия данных запуска.
         if ip_restriction.is_enabled():
             client_ip = ip_restriction.get_client_ip()
             if not ip_restriction.is_ip_allowed(client_ip):

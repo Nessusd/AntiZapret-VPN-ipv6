@@ -79,6 +79,8 @@ def mode_network(prefix: str, name: str) -> ipaddress.IPv6Network:
 def reconcile_text(
     text: str, prefix: str, name: str, *, enable: bool
 ) -> tuple[str, int]:
+    # Меняем только известные директивы. Любая неоднозначная или уже вручную
+    # настроенная IPv6-конфигурация требует решения администратора.
     mode = MODES[name]
     network = mode_network(prefix, name)
     managed_server = f"server-ipv6 {network}"
@@ -147,6 +149,8 @@ def reconcile_text(
         changes += len(managed_server_indexes)
 
     if mode.full_vpn:
+        # redirect-gateway IPv6 нужен только профилям полного VPN; AntiZapret
+        # получает выборочные маршруты из DEFAULT CCD.
         redirect_indexes = [
             index for index, line in enumerate(lines) if line.strip() == managed_redirect
         ]
@@ -176,6 +180,7 @@ def reconcile_text(
 
 
 def atomic_write(path: Path, content: str) -> None:
+    # Права исходного файла сохраняются, а rename исключает чтение половины конфига.
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )

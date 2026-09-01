@@ -1,3 +1,4 @@
+// Синхронизирует выбор клиента, протокола и периода между таблицей и графиком.
 (function () {
     const fmt = window.LogsDashboardFmt || {};
     const theme = window.LogsDashboardChartTheme || {};
@@ -211,6 +212,8 @@
     }
 
     function applyTrafficProtocolFilter(forceSelection) {
+        // Один фильтр применяется к combobox и таблицам, чтобы выбранный клиент
+        // всегда оставался видимым в текущем протокольном режиме.
         localStorage.setItem(storageTrafficProtocolKey, currentTrafficProtocol);
 
         visibleClientOptions = allClientOptions.filter(function (option) {
@@ -258,6 +261,8 @@
     }
 
     async function loadClientChart(targetClient) {
+        // Сохранённый выбор мог относиться к другому протоколу, поэтому перед
+        // запросом он повторно сверяется с видимыми вариантами.
         if (!applyTrafficProtocolFilter(false)) {
             return;
         }

@@ -1,3 +1,4 @@
+// Поддерживает историю метрик и переключается между WebSocket и HTTP polling.
 (function () {
   const { chartColors, chartTypography } = window.ServerMonitorChartTheme;
 
@@ -345,6 +346,8 @@
   }
 
   async function loadSystemInfo({ accurate = false } = {}) {
+    // Частый polling использует лёгкий снимок; accurate запрашивается только
+    // там, где действительно нужны более дорогие измерения.
     try {
       const url = accurate ? "/api/system-info?accurate=1" : "/api/system-info";
       const response = await fetch(url, { cache: "no-store" });
@@ -401,6 +404,8 @@
   }
 
   function startWebSocket(onFallbackPoll, { onLive, onPoll } = {}) {
+    // Ошибка live-канала включает внешний polling, но этот модуль сам не создаёт
+    // дополнительные интервалы при последовательных error и close.
     let liveNotified = false;
 
     const notifyPoll = () => {

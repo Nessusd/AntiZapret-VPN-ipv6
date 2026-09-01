@@ -1,3 +1,4 @@
+# Возвращает только существующие и допустимые для текущего режима маршрутные выгрузки.
 def build_route_download_actions(
     public_download_enabled: bool,
     url_for,

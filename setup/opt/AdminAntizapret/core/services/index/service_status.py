@@ -1,3 +1,4 @@
+# Сводит несколько systemd unit одного компонента в единый статус главной страницы.
 import shutil
 import subprocess
 

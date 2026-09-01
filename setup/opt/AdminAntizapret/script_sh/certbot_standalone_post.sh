@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eu
 
+# Возвращает ровно то количество redirect-правил, которое pre-hook снял перед
+# standalone challenge. Файл состояния защищён общей блокировкой hooks.
 state_file=/run/admin-antizapret-certbot-redirect.state
 lock_file=/run/admin-antizapret-certbot-redirect.lock
 
@@ -20,6 +22,8 @@ restore_redirects() {
 	(( count == 0 )) && return 0
 	[[ "$interface" =~ ^[[:alnum:]_.:@-]+$ ]] || return 1
 	command -v "$tool" >/dev/null 2>&1 || return 1
+	# Сначала удаляем возможный неполный остаток предыдущего запуска, затем
+	# восстанавливаем сохранённое число одинаковых правил.
 	while "$tool" -w -t nat -C "$chain" -i "$interface" -p tcp \
 		--dport 80 -j REDIRECT --to-ports 50080 2>/dev/null
 	do

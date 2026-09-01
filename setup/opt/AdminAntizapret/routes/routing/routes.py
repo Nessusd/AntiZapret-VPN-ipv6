@@ -1,3 +1,4 @@
+# Отдаёт read-only представление текущих маршрутных списков.
 from flask import render_template
 
 from core.services.routing.page_context import build_routing_page_context

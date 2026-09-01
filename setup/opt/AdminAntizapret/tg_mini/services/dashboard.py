@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Сжимает полные данные панели до модели мобильного Telegram-интерфейса.
+
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any

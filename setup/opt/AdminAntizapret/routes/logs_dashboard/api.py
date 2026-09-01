@@ -1,3 +1,4 @@
+# JSON API журнала проверяет доступ до чтения кэша и запуска фоновых задач.
 from flask import jsonify, request, session
 
 from core.services.logs_dashboard import fetch_user_traffic_chart

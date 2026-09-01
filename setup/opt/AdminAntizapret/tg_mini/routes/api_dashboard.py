@@ -1,3 +1,4 @@
+# Отдаёт компактную сводку панели только для подтверждённой Mini App сессии.
 from flask import jsonify, session
 
 from tg_mini.services.dashboard import build_tg_mini_dashboard_payload

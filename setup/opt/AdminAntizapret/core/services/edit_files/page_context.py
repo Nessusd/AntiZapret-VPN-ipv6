@@ -1,3 +1,4 @@
+# Собирает контекст редактора и скрывает IPv6-результаты при отключённом стеке.
 from core.services.antizapret_settings import is_antizapret_ipv6_enabled
 
 from .editor_metadata import get_editor_subtitle, get_editor_title

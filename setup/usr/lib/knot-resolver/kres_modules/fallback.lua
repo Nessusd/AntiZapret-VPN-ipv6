@@ -1,3 +1,4 @@
+-- Повторяет запрос через резервные upstream только один раз для каждого request.
 -- Fallback on bad answer from default upstream
 
 local ffi = require('ffi')

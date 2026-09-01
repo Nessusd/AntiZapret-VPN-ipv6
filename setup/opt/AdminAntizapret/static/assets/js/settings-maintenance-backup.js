@@ -1,3 +1,4 @@
+// Управляет списком backup, фоновыми задачами создания и отдельным restore job.
 (function () {
   const section = document.querySelector(".maintenance-section--backup");
   if (!section) return;
@@ -161,6 +162,8 @@
   };
 
   const apiFetch = async (url, options = {}) => {
+    // Часовой пояс передаётся вместе с каждым запросом, чтобы серверные даты
+    // отображались согласованно после фонового создания архива.
     const headers = Object.assign(
       {
         "X-Requested-With": "XMLHttpRequest",
@@ -226,6 +229,8 @@
   };
 
   const waitForRestoreJob = async (data) => {
+    // Restore использует отдельный одноразовый token статуса: обычного task id
+    // недостаточно для наблюдения за процессом после перезапуска web-службы.
     const statusUrl = String(data?.status_url || "").trim();
     const statusToken = String(data?.status_token || "").trim();
     if (!statusUrl || !statusToken) {

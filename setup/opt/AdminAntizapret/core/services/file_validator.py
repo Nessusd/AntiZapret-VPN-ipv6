@@ -1,3 +1,4 @@
+# Проверяет пользовательские строки до передачи их штатным парсерам AntiZapret.
 import os
 import logging
 from functools import wraps

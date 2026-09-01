@@ -1,3 +1,4 @@
+# Blueprint отделяет сессию Mini App от обычных маршрутов панели.
 from flask import Blueprint
 
 bp = Blueprint(

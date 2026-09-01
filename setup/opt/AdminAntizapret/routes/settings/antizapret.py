@@ -1,3 +1,4 @@
+# Отдаёт параметры AntiZapret из его setup и меняет их через штатный механизм применения.
 from flask import current_app, jsonify, request, session
 
 from config.antizapret_params import ANTIZAPRET_PARAMS

@@ -1,3 +1,4 @@
+# Отдаёт минимальную страницу блокировки и ограниченный ping без доступа к данным панели.
 import time
 
 from flask import jsonify, redirect, render_template, url_for

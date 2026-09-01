@@ -1,3 +1,4 @@
+// Единый toast-стек ограничивает число сообщений и завершает анимацию перед удалением.
 (function () {
   const DURATION = { success: 5000, info: 5000, warning: 5000, error: 10000 };
   const MAX_VISIBLE = 5;

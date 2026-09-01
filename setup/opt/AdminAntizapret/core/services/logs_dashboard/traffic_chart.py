@@ -1,3 +1,4 @@
+# Агрегирует сохранённые счётчики клиента во временные ряды выбранного диапазона.
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 

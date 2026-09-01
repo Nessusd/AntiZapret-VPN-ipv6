@@ -1,3 +1,4 @@
+# Endpoint-имена собраны здесь, чтобы middleware применял одно правило доступа.
 IP_BLOCKED_PAGE_ENDPOINT = "ip_blocked"
 IP_BLOCKED_PING_ENDPOINT = "ip_blocked_ping"
 IP_BLOCKED_STATIC_ENDPOINT = "ip_blocked.static"

@@ -1,3 +1,4 @@
+# Применяет блокировки WG/AWG к живым интерфейсам и сохраняет исходное состояние peer.
 import os
 import subprocess
 import tempfile

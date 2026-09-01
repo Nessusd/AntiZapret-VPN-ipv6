@@ -1,3 +1,4 @@
+# Собирает page и API маршруты журнала подключений.
 from .api import register_logs_dashboard_api_routes
 from .routes import register_logs_dashboard_page_routes
 

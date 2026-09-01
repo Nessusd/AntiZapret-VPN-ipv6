@@ -1,3 +1,4 @@
+// Следит за фоновой задачей обновления кэша и перезагружает страницу после завершения.
 (function () {
     const taskId = (window.__logsDashboardBootstrap || {}).refreshTaskId;
     if (!taskId) {
@@ -11,6 +12,7 @@
     let stopPolling = false;
 
     async function pollRefreshStatus() {
+        // Общий лимит времени завершает polling, если задача исчезла после рестарта сервиса.
         if (stopPolling) {
             return;
         }

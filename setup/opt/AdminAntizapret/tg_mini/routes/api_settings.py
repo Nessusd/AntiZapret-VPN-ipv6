@@ -1,3 +1,4 @@
+# Ограниченный API Mini App не открывает административные действия панели.
 from flask import jsonify, request, session
 
 from tg_mini.services.settings import build_tg_mini_settings_payload, update_tg_mini_settings

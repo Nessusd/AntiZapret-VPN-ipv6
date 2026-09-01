@@ -1,3 +1,4 @@
+# Изолированный Blueprint не наследует обычную проверку доступа к панели.
 from flask import Blueprint
 
 bp = Blueprint(

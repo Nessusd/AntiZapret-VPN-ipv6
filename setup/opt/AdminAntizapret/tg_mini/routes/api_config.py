@@ -1,3 +1,4 @@
+# Проверяет право Mini App на конфиг и передаёт файл через Telegram Bot API.
 import os
 import re
 import urllib.parse
