@@ -281,7 +281,6 @@ const BACKGROUND_TASK_STAGE_FALLBACKS = {
   run_doall: "AntiZapret: применение изменений…",
   restart_service: "Перезапуск службы AdminAntizapret…",
   app_backup_create: "Резервная копия: создание архива…",
-  app_backup_test_tg: "Резервная копия: отправка в Telegram…",
   logs_dashboard_refresh: "Обновление панели логов…",
 };
 

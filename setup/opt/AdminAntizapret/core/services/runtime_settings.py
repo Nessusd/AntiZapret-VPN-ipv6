@@ -54,7 +54,6 @@ class RuntimeSettingsService:
         )
         wg_policy_sync_enabled = self._env_bool("WG_POLICY_SYNC_ENABLED", default=True)
         wg_policy_sync_cron_expr = self._env_str("WG_POLICY_SYNC_CRON", "*/2 * * * *")
-        monitor_enabled = self._env_bool("MONITOR_ENABLED", default=True)
         active_web_session_tracking_enabled = self._env_bool(
             "ACTIVE_WEB_SESSION_TRACKING_ENABLED", default=True
         )
@@ -67,7 +66,6 @@ class RuntimeSettingsService:
             backup_interval_days = 1
         backup_time = self._env_str("APP_BACKUP_TIME", "03:00")
         backup_components = self._env_str("APP_BACKUP_COMPONENTS", "db,env,data")
-        backup_tg_admin_ids = self._env_str("APP_BACKUP_TG_ADMIN_IDS", "")
         backup_az_enabled = self._env_bool("APP_BACKUP_AZ_ENABLED", default=True)
         backup_az_install_dir = self._env_str("APP_BACKUP_AZ_INSTALL_DIR", "") or self._env_str(
             "ANTIZAPRET_INSTALL_DIR", "/root/antizapret"
@@ -118,7 +116,6 @@ class RuntimeSettingsService:
             "WG_POLICY_SYNC_ENABLED": wg_policy_sync_enabled,
             "WG_POLICY_SYNC_CRON_MARKER": "# adminantizapret-wg-policy-sync",
             "WG_POLICY_SYNC_CRON_EXPR": wg_policy_sync_cron_expr,
-            "MONITOR_ENABLED": monitor_enabled,
             "ACTIVE_WEB_SESSION_TRACKING_ENABLED": active_web_session_tracking_enabled,
             "RUNTIME_BACKUP_CLEANUP_ENABLED": runtime_backup_cleanup_enabled,
             "APP_BACKUP_CRON_MARKER": "# adminantizapret-app-backup",
@@ -126,8 +123,6 @@ class RuntimeSettingsService:
             "APP_BACKUP_INTERVAL_DAYS": backup_interval_days,
             "APP_BACKUP_TIME": backup_time,
             "APP_BACKUP_COMPONENTS": backup_components,
-            "APP_BACKUP_TG_ENABLED": self._env_bool("APP_BACKUP_TG_ENABLED", default=False),
-            "APP_BACKUP_TG_ADMIN_IDS": backup_tg_admin_ids,
             "APP_BACKUP_ROOT": backup_root,
             "APP_BACKUP_RETENTION_COUNT": 5,
             "APP_BACKUP_SERVICE_NAME": self._env_str("APP_BACKUP_SERVICE_NAME", "admin-antizapret"),

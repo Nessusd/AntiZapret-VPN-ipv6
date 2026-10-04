@@ -119,10 +119,10 @@ change_port() {
         press_any_key
         return
     fi
-    if [ -f "$INSTALL_DIR/.env" ]; then
-        sed -i "/^APP_PORT=/d" "$INSTALL_DIR/.env"
+    if ! set_env_value "APP_PORT" "$APP_PORT"; then
+        ui_fail "Не удалось сохранить порт в .env"
+        return 1
     fi
-    printf 'APP_PORT=%s\n' "$APP_PORT" >> "$INSTALL_DIR/.env"
     _update_nginx_proxy_port_if_present "$APP_PORT"
     ui_ok "Порт изменён на $APP_PORT. Перезапуск..."
     restart_service

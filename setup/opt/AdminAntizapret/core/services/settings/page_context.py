@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from core.services.audit_view_presenter import (
-    build_telegram_mini_audit_view,
     build_user_action_audit_view,
     build_user_action_day_groups,
     build_user_action_sessions,
@@ -13,20 +12,7 @@ from core.services.feature_toggles import (
     build_feature_toggles_page_items,
 )
 from core.services.panel_publish_info import build_panel_publish_context
-from core.services.settings.telegram_normalize import nightly_time_from_cron
-
-
-def _telegram_auth_fields(get_env_value):
-    telegram_auth_bot_username = get_env_value("TELEGRAM_AUTH_BOT_USERNAME", "")
-    telegram_auth_max_age_seconds = get_env_value("TELEGRAM_AUTH_MAX_AGE_SECONDS", "300")
-    telegram_auth_bot_token_set = bool((get_env_value("TELEGRAM_AUTH_BOT_TOKEN", "") or "").strip())
-    telegram_auth_enabled = bool(telegram_auth_bot_username and telegram_auth_bot_token_set)
-    return {
-        "telegram_auth_bot_username": telegram_auth_bot_username,
-        "telegram_auth_max_age_seconds": telegram_auth_max_age_seconds,
-        "telegram_auth_bot_token_set": telegram_auth_bot_token_set,
-        "telegram_auth_enabled": telegram_auth_enabled,
-    }
+from core.services.settings.input_normalize import nightly_time_from_cron
 
 
 def build_settings_page_context(
@@ -34,7 +20,6 @@ def build_settings_page_context(
     user_model,
     active_web_session_model,
     qr_download_audit_log_model,
-    telegram_mini_audit_log_model,
     user_action_log_model,
     ip_restriction,
     config_file_handler,
@@ -74,23 +59,12 @@ def build_settings_page_context(
         for item in str(backup_settings.get("components", "db,env,data")).split(",")
         if item.strip().lower() in {"db", "env", "data"}
     }
-    backup_tg_admin_ids = {
-        item.strip()
-        for item in str(backup_settings.get("tg_admin_ids", "")).split(",")
-        if item.strip()
-    }
     try:
         backup_entries = backup_manager_service.list_backups()
     except Exception:
         backup_entries = []
     for entry in backup_entries:
         entry["size_human"] = _human_size(entry.get("size_bytes", 0))
-    backup_admin_candidates = (
-        user_model.query.filter_by(role="admin")
-        .filter(user_model.telegram_id.isnot(None))
-        .all()
-    )
-
     active_web_session_ttl_seconds, active_web_session_touch_interval_seconds = get_active_web_session_settings()
     active_web_sessions_count = active_web_session_model.query.filter(
         active_web_session_model.last_seen_at
@@ -100,10 +74,6 @@ def build_settings_page_context(
     qr_download_audit_logs = qr_download_audit_log_model.query.order_by(
         qr_download_audit_log_model.created_at.desc()
     ).limit(100).all()
-    telegram_mini_audit_logs = telegram_mini_audit_log_model.query.order_by(
-        telegram_mini_audit_log_model.created_at.desc()
-    ).limit(200).all()
-    telegram_mini_audit_view = build_telegram_mini_audit_view(telegram_mini_audit_logs)
     user_action_logs = user_action_log_model.query.order_by(
         user_action_log_model.created_at.desc()
     ).limit(300).all()
@@ -133,11 +103,6 @@ def build_settings_page_context(
     ip_enabled = ip_restriction.is_enabled()
     current_ip = ip_restriction.get_client_ip()
     scanner_settings = ip_restriction.get_scanner_settings()
-
-    monitor_cpu_threshold = int((get_env_value("MONITOR_CPU_THRESHOLD", "90") or "90").strip())
-    monitor_ram_threshold = int((get_env_value("MONITOR_RAM_THRESHOLD", "90") or "90").strip())
-    monitor_interval_seconds = int((get_env_value("MONITOR_CHECK_INTERVAL_SECONDS", "60") or "60").strip())
-    monitor_cooldown_minutes = int((get_env_value("MONITOR_COOLDOWN_MINUTES", "30") or "30").strip())
 
     panel_publish = build_panel_publish_context(
         get_env_value=get_env_value,
@@ -188,24 +153,15 @@ def build_settings_page_context(
         "app_backup_interval_days": int(backup_settings.get("interval_days", 1)),
         "app_backup_time_hhmm": str(backup_settings.get("time_hhmm", "03:00")),
         "app_backup_selected_components": backup_selected_components,
-        "app_backup_tg_enabled": bool(backup_settings.get("tg_enabled", False)),
         "app_backup_az_enabled": bool(backup_settings.get("az_enabled", True)),
-        "app_backup_tg_admin_ids": backup_tg_admin_ids,
         "app_backup_list": backup_entries,
-        "app_backup_admin_candidates": backup_admin_candidates,
         "active_web_session_ttl_seconds": active_web_session_ttl_seconds,
         "active_web_session_touch_interval_seconds": active_web_session_touch_interval_seconds,
         "active_web_sessions_count": active_web_sessions_count,
         "qr_download_audit_logs": qr_download_audit_logs,
-        "telegram_mini_audit_logs": telegram_mini_audit_view,
         "user_action_audit_logs": user_action_audit_view,
         "user_action_sessions": user_action_sessions,
         "user_action_day_groups": user_action_day_groups,
-        "monitor_cpu_threshold": monitor_cpu_threshold,
-        "monitor_ram_threshold": monitor_ram_threshold,
-        "monitor_interval_seconds": monitor_interval_seconds,
-        "monitor_cooldown_minutes": monitor_cooldown_minutes,
         "feature_toggles": build_feature_toggles_page_items(get_env_value=get_env_value),
         "feature_toggle_groups": build_feature_toggles_page_groups(get_env_value=get_env_value),
-        **_telegram_auth_fields(get_env_value),
     }

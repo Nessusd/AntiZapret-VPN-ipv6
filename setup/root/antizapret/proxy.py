@@ -131,19 +131,17 @@ class ProxyResolver(BaseResolver):
             if not fake_ip:
                 print("Error: No fake IP left")
                 return None
-            self.ip_map[real_ip] = {"fake_ip": fake_ip,"last_access": current_time}
-        try:
-            # Правило публикуется только после резервирования адреса в памяти;
-            # при ошибке iptables резерв обязательно возвращается в пул.
-            subprocess.run([self.iptables(family),"-w","-t","nat","-A",self.chain(family),"-d",fake_ip,"-j","DNAT","--to-destination",real_ip],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,env=self._env)
-        except Exception as e:
-            print(f"Error: {e} (real_ip={real_ip} fake_ip={fake_ip})")
-            with self.lock:
-                del self.ip_map[real_ip]
+            try:
+                # Не отдаём Fake-IP параллельному запросу до установки DNAT.
+                # Блокировка также исключает очистку ещё не готового правила.
+                subprocess.run([self.iptables(family),"-w","-t","nat","-A",self.chain(family),"-d",fake_ip,"-j","DNAT","--to-destination",real_ip],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,env=self._env)
+            except Exception as e:
+                print(f"Error: {e} (real_ip={real_ip} fake_ip={fake_ip})")
                 pool.release(fake_ip)
-            return None
-        #print(f"Mapping: {fake_ip} to {real_ip}")
-        return fake_ip
+                return None
+            self.ip_map[real_ip] = {"fake_ip": fake_ip,"last_access": current_time}
+            #print(f"Mapping: {fake_ip} to {real_ip}")
+            return fake_ip
 
     def mapping_ip(self,real_ip,fake_ip,current_time):
         try:
@@ -180,8 +178,8 @@ class ProxyResolver(BaseResolver):
                     os._exit(1)
 
     def cleanup_fake_ips(self):
-        # Список удалений формируется под блокировкой, а пакетная правка firewall
-        # выполняется после неё, чтобы не задерживать параллельные DNS-запросы.
+        # Пока старый DNAT действует, адрес нельзя вернуть в пул. Изменение
+        # firewall и памяти остаётся под одной блокировкой с DNS-запросами.
         with self.lock:
             current_time = time.time()
             cleanup_ips = []
@@ -191,17 +189,21 @@ class ProxyResolver(BaseResolver):
                     cleanup_ips.append((real_ip,entry["fake_ip"]))
             for real_ip,fake_ip in cleanup_ips:
                 family = ip_address(real_ip).version
-                self.pools[family].release(fake_ip)
-                del self.ip_map[real_ip]
                 rules[family].append(f"-D {self.chain(family)} -d {fake_ip} -j DNAT --to-destination {real_ip}")
-                #print(f"Unmapping: {fake_ip} to {real_ip}")
-        if cleanup_ips:
-            for family,family_rules in rules.items():
-                if len(family_rules) == 1:
-                    continue
-                family_rules.append("COMMIT")
-                subprocess.run([self.iptables_restore(family),"-w","-n"],input="\n".join(family_rules).encode(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,env=self._env)
-            print(f"Cleaned: {len(cleanup_ips)} expired fake IPs")
+            if cleanup_ips:
+                for family,family_rules in rules.items():
+                    if len(family_rules) == 1:
+                        continue
+                    family_rules.append("COMMIT")
+                    subprocess.run([self.iptables_restore(family),"-w","-n"],input="\n".join(family_rules).encode(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,env=self._env)
+                    # Семейства применяются отдельно: ошибка второго не должна
+                    # оставлять в памяти уже удалённые правила первого.
+                    for real_ip,fake_ip in cleanup_ips:
+                        if ip_address(real_ip).version == family:
+                            self.pools[family].release(fake_ip)
+                            del self.ip_map[real_ip]
+                            #print(f"Unmapping: {fake_ip} to {real_ip}")
+                print(f"Cleaned: {len(cleanup_ips)} expired fake IPs")
 
     def resolve(self,request,handler):
         try:

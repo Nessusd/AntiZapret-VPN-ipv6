@@ -1,6 +1,8 @@
 # Выполняет ограниченное чтение и атомарную запись разрешённых конфигурацией файлов.
 import logging
 
+from utils.file_io import atomic_write_text, file_lock
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +26,8 @@ class FileEditor:
     def update_file_content(self, file_type, content):
         if file_type in self.files:
             try:
-                with open(self.files[file_type], "w", encoding="utf-8") as f:
-                    f.write(content)
+                with file_lock(self.files[file_type]) as path:
+                    atomic_write_text(path, content)
                 return True
             except OSError as e:
                 logger.exception("Ошибка записи в файл %s: %s", self.files[file_type], e)

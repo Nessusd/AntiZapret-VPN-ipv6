@@ -13,9 +13,13 @@ import tarfile
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import dotenv_values
+
+from utils.file_io import file_lock
 
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SYSTEMD_SERVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,254}$")
@@ -401,18 +405,13 @@ class RestoreJobService:
 
     @staticmethod
     def _load_env_map(path: Path) -> dict[str, str]:
-        result: dict[str, str] = {}
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            # Та же грамматика dotenv, что при старте панели, но без подстановок.
+            values = dotenv_values(path, interpolate=False)
         except OSError:
-            return result
-        for raw_line in lines:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            result[key.strip()] = value.strip().strip("'").strip('"')
-        return result
+            return {}
+        # KEY= остаётся пустой строкой; запись без '=' не задаёт параметр.
+        return {key: value for key, value in values.items() if value is not None}
 
     def _with_sqlite_sidecars(self, manifest: list[dict]) -> list[dict]:
         targets = {item["target"] for item in manifest}
@@ -539,17 +538,19 @@ class RestoreJobService:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_symlink():
             raise RuntimeError(f"Целевой runtime-файл является ссылкой: {target}")
-        fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-        try:
-            with os.fdopen(fd, "wb") as output, source.open("rb") as input_file:
-                shutil.copyfileobj(input_file, output, length=1024 * 1024)
-                output.flush()
-                os.fsync(output.fileno())
-            os.chmod(temporary, mode & 0o777)
-            os.replace(temporary, target)
-        finally:
-            if os.path.exists(temporary):
-                os.remove(temporary)
+        # Восстановление .env участвует в той же блокировке, что веб-форма и CLI.
+        with file_lock(target) if target.name == ".env" else nullcontext():
+            fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+            try:
+                with os.fdopen(fd, "wb") as output, source.open("rb") as input_file:
+                    shutil.copyfileobj(input_file, output, length=1024 * 1024)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.chmod(temporary, mode & 0o777)
+                os.replace(temporary, target)
+            finally:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
 
     def _validate_target_parent(
         self,

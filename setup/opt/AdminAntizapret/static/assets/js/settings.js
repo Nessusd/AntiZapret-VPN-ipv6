@@ -48,53 +48,6 @@ document.addEventListener("DOMContentLoaded", function () {
       };
     });
   };
-  const initMiniAppLinkCopy = () => {
-    const input = document.getElementById("tg-mini-link-input");
-    const button = document.getElementById("copy-tg-mini-link-btn");
-    const status = document.getElementById("copy-tg-mini-link-status");
-
-    if (!input || !button || !status) {
-      return;
-    }
-
-    const setStatus = (text, isError = false) => {
-      status.textContent = text;
-      status.classList.toggle("miniapp-link-status-error", Boolean(isError));
-    };
-
-    const fallbackCopy = (text) => {
-      input.removeAttribute("readonly");
-      input.focus();
-      input.select();
-      input.setSelectionRange(0, text.length);
-      const ok = document.execCommand("copy");
-      input.setAttribute("readonly", "readonly");
-      return ok;
-    };
-
-    button.addEventListener("click", async () => {
-      const text = (input.value || "").trim();
-      if (!text) {
-        setStatus("Ссылка пуста", true);
-        return;
-      }
-
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(text);
-        } else if (!fallbackCopy(text)) {
-          throw new Error("clipboard_unavailable");
-        }
-
-        setStatus("Ссылка скопирована");
-      } catch {
-        setStatus("Не удалось скопировать автоматически. Скопируйте ссылку вручную.", true);
-        input.focus();
-        input.select();
-      }
-    });
-  };
-
   const initSettingsRangeControls = () => {
     const formatSecondsHuman = (rawSeconds) => {
       const seconds = Number(rawSeconds);
@@ -209,7 +162,6 @@ document.addEventListener("DOMContentLoaded", function () {
   };
 
   initUserActionPopups();
-  initMiniAppLinkCopy();
   initSettingsRangeControls();
 });
 // Обработка перезапуска службы

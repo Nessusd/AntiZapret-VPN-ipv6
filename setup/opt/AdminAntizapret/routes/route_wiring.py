@@ -7,7 +7,6 @@ from routes.edit_files import register_edit_files_routes
 from routes.index import register_index_routes
 from routes.logs_dashboard import register_logs_dashboard_routes
 from ip_blocked import register_ip_blocked_routes
-from tg_mini import register_tg_mini_routes
 from routes.server_monitor import register_server_monitor_routes
 from routes.settings import register_settings_routes
 
@@ -26,9 +25,7 @@ def register_all_routes(app, sock, deps):
         get_env_value=g("_get_env_value"),
         touch_active_web_session=g("_touch_active_web_session"),
         remove_active_web_session=g("_remove_active_web_session"),
-        log_telegram_audit_event=g("_log_telegram_audit_event"),
         log_user_action_event=g("_log_user_action_event"),
-        send_tg_admin_notification=g("_send_tg_admin_notification"),
     )
 
     register_ip_blocked_routes(app, ip_restriction=g("ip_restriction"))
@@ -64,7 +61,6 @@ def register_all_routes(app, sock, deps):
         set_env_value=g("_set_env_value"),
         get_public_download_enabled=g("_get_public_download_enabled"),
         set_public_download_enabled=g("_set_public_download_enabled"),
-        log_telegram_audit_event=g("_log_telegram_audit_event"),
         log_user_action_event=g("_log_user_action_event"),
         limiter=g("limiter"),
         get_client_ip=g("_get_client_ip"),
@@ -104,7 +100,6 @@ def register_all_routes(app, sock, deps):
         user_model=g("User"),
         active_web_session_model=g("ActiveWebSession"),
         qr_download_audit_log_model=g("QrDownloadAuditLog"),
-        telegram_mini_audit_log_model=g("TelegramMiniAuditLog"),
         user_action_log_model=g("UserActionLog"),
         ip_restriction=g("ip_restriction"),
         collect_all_openvpn_files_for_access=g("collect_all_openvpn_files_for_access"),
@@ -134,8 +129,6 @@ def register_all_routes(app, sock, deps):
         backup_manager_service=g("backup_manager_service"),
         maintenance_scheduler_service=g("maintenance_scheduler_service"),
         runtime_set=g("_runtime_set"),
-        app_root=g("APP_ROOT"),
-        log_telegram_audit_event=g("_log_telegram_audit_event"),
         log_user_action_event=g("_log_user_action_event"),
     )
 
@@ -170,9 +163,7 @@ def register_all_routes(app, sock, deps):
         wg_clear_traffic_limit=g("_wg_clear_traffic_limit"),
         wg_reconcile_client_policy=g("_wg_reconcile_client_policy"),
         wg_reconcile_all_policies=g("_wg_reconcile_all_policies"),
-        log_telegram_audit_event=g("_log_telegram_audit_event"),
         log_user_action_event=g("_log_user_action_event"),
-        send_tg_admin_notification=g("_send_tg_admin_notification"),
         client_name_pattern=g("CLIENT_NAME_PATTERN"),
     )
 
@@ -202,30 +193,4 @@ def register_all_routes(app, sock, deps):
         collect_config_protocols_by_client=g("_collect_config_protocols_by_client"),
         user_traffic_sample_model=g("UserTrafficSample"),
         human_bytes=g("_human_bytes"),
-    )
-
-    register_tg_mini_routes(
-        app,
-        sock,
-        auth_manager=g("auth_manager"),
-        get_logs_dashboard_data_cached=g("_get_logs_dashboard_data_cached"),
-        user_traffic_sample_model=g("UserTrafficSample"),
-        human_bytes=g("_human_bytes"),
-        user_model=g("User"),
-        viewer_config_access_model=g("ViewerConfigAccess"),
-        resolve_config_file=g("_resolve_config_file"),
-        get_config_type=g("_get_config_type"),
-        io_executor=g("io_bound_executor"),
-        log_telegram_audit_event=g("_log_telegram_audit_event"),
-        log_user_action_event=g("_log_user_action_event"),
-        enqueue_background_task=g("_enqueue_background_task"),
-        task_restart_service=g("_task_restart_service"),
-        set_env_value=g("_set_env_value"),
-        get_env_value=g("_get_env_value"),
-        is_valid_cron_expression=g("_is_valid_cron_expression"),
-        ensure_nightly_idle_restart_cron=g("_ensure_nightly_idle_restart_cron"),
-        get_nightly_idle_restart_settings=g("_get_nightly_idle_restart_settings"),
-        set_nightly_idle_restart_settings=g("_set_nightly_idle_restart_settings"),
-        get_active_web_session_settings=g("_get_active_web_session_settings"),
-        set_active_web_session_settings=g("_set_active_web_session_settings"),
     )

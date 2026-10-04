@@ -130,7 +130,6 @@ def handle_backup_settings(
         return None
 
     enabled = to_bool((form.get("app_backup_enabled") or "false").strip().lower(), default=False)
-    tg_enabled = to_bool((form.get("app_backup_tg_enabled") or "false").strip().lower(), default=False)
     az_enabled = to_bool((form.get("app_backup_az_enabled") or "true").strip().lower(), default=True)
 
     interval_raw = (form.get("app_backup_interval_days") or "1").strip()
@@ -139,9 +138,6 @@ def handle_backup_settings(
     selected_components = [v for v in selected_components if v in {"db", "env", "data"}]
     if not selected_components:
         selected_components = ["db", "env", "data"]
-
-    selected_admin_ids = [str(v).strip() for v in _form_getlist(form, "app_backup_tg_admin_ids")]
-    selected_admin_ids = [v for v in selected_admin_ids if v.isdigit()]
 
     if interval_raw not in {"1", "7", "30"}:
         flash("Интервал авто-бэкапа должен быть 1, 7 или 30 дней", "error")
@@ -153,31 +149,24 @@ def handle_backup_settings(
         return None
 
     components_csv = ",".join(selected_components)
-    admin_ids_csv = ",".join(selected_admin_ids)
     interval_days = int(interval_raw)
     set_backup_settings(
         enabled=enabled,
         interval_days=interval_days,
         time_hhmm=time_raw,
         components=components_csv,
-        tg_enabled=tg_enabled,
-        tg_admin_ids=admin_ids_csv,
         az_enabled=az_enabled,
     )
     set_env_value("APP_BACKUP_ENABLED", "true" if enabled else "false")
     set_env_value("APP_BACKUP_INTERVAL_DAYS", str(interval_days))
     set_env_value("APP_BACKUP_TIME", time_raw)
     set_env_value("APP_BACKUP_COMPONENTS", components_csv)
-    set_env_value("APP_BACKUP_TG_ENABLED", "true" if tg_enabled else "false")
-    set_env_value("APP_BACKUP_TG_ADMIN_IDS", admin_ids_csv)
     set_env_value("APP_BACKUP_AZ_ENABLED", "true" if az_enabled else "false")
 
     os.environ["APP_BACKUP_ENABLED"] = "true" if enabled else "false"
     os.environ["APP_BACKUP_INTERVAL_DAYS"] = str(interval_days)
     os.environ["APP_BACKUP_TIME"] = time_raw
     os.environ["APP_BACKUP_COMPONENTS"] = components_csv
-    os.environ["APP_BACKUP_TG_ENABLED"] = "true" if tg_enabled else "false"
-    os.environ["APP_BACKUP_TG_ADMIN_IDS"] = admin_ids_csv
     os.environ["APP_BACKUP_AZ_ENABLED"] = "true" if az_enabled else "false"
 
     cron_ok, cron_msg = ensure_app_backup_cron()
@@ -192,72 +181,11 @@ def handle_backup_settings(
         details=(
             f"enabled={'вкл' if enabled else 'выкл'} interval={interval_days}d "
             f"time={time_raw} components={components_csv} "
-            f"tg={'вкл' if tg_enabled else 'выкл'} az={'вкл' if az_enabled else 'выкл'} "
-            f"admins={admin_ids_csv or '-'}"
+            f"az={'вкл' if az_enabled else 'выкл'}"
         ),
         status="success" if cron_ok else "warning",
     )
     return None
-
-
-def handle_backup_test_telegram(
-    form,
-    *,
-    flash,
-    session,
-    enqueue_background_task,
-    app_root,
-    log_user_action_event,
-):
-    if form.get("backup_test_tg_action") != "test":
-        return None
-
-    from core.services.backup_telegram_job import run_backup_job, validate_telegram_delivery
-
-    ok, err = validate_telegram_delivery(app_root)
-    if not ok:
-        flash(err, "error")
-        return None
-
-    task_id = None
-    try:
-        def _task_test_backup_tg(progress_updater=None):
-            if progress_updater:
-                progress_updater(10, "Резервная копия: создание архива для Telegram…")
-            result = run_backup_job(
-                app_root,
-                trigger="test",
-                require_auto_enabled=False,
-                send_telegram=True,
-            )
-            if progress_updater:
-                progress_updater(85, "Резервная копия: отправка в Telegram…")
-            return {
-                "message": f"Создание бэкапа и отправка в Telegram завершены: {result.get('summary', '')}",
-                "output": result.get("summary", ""),
-            }
-
-        task = enqueue_background_task(
-            "app_backup_test_tg",
-            _task_test_backup_tg,
-            created_by_username=session.get("username"),
-            queued_message="Создание бэкапа и отправка в Telegram поставлены в очередь",
-        )
-        task_id = task.id
-        flash(
-            f"Создание бэкапа и отправка в Telegram запущены в фоне (task: {task.id[:8]}). "
-            "Архивы панели и AntiZapret (если включён) будут отправлены выбранным админам.",
-            "info",
-        )
-        log_user_action_event(
-            "settings_backup_test_telegram",
-            target_type="backup",
-            target_name="test_telegram",
-        )
-    except Exception as exc:
-        flash(f"Ошибка создания бэкапа и отправки в Telegram: {exc}", "error")
-        return None
-    return {"task_id": task_id} if task_id else None
 
 
 def handle_backup_create(

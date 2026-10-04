@@ -100,10 +100,6 @@
               <a href="{{ url_for('settings', _anchor='security') }}" class="nav-sublink"
                 data-settings-tab="security">Безопасность</a>
               {% endif %}
-              {% if feature_modules.get('telegram', true) %}
-              <a href="{{ url_for('settings', _anchor='telegram-auth') }}" class="nav-sublink"
-                data-settings-tab="telegram-auth">Telegram авторизация</a>
-              {% endif %}
               {% if feature_modules.get('user_management', true) %}
               <a href="{{ url_for('settings', _anchor='user-management') }}" class="nav-sublink"
                 data-settings-tab="user-management">Пользователи и доступ</a>

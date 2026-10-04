@@ -8,10 +8,7 @@ _ensure_env_default() {
     local value="$2"
     local env_file="${INSTALL_DIR:?INSTALL_DIR не задан}/.env"
 
-    mkdir -p "$INSTALL_DIR"
-    [ -f "$env_file" ] || touch "$env_file"
-    grep -q "^${key}=" "$env_file" 2>/dev/null && return 0
-    printf '%s=%s\n' "$key" "$value" >> "$env_file"
+    printf '%s' "$value" | python3 "$INSTALL_DIR/utils/env_file.py" "$env_file" --default "$key"
 }
 
 ensure_env_defaults() {
@@ -39,21 +36,12 @@ ensure_env_defaults() {
     _ensure_env_default "IP_RESTRICTION_MODE" "strict"
     _ensure_env_default "PUBLIC_DOWNLOAD_ENABLED" "false"
 
-    # Telegram-авторизация (токены и секреты задаются вручную в настройках)
-    _ensure_env_default "TELEGRAM_AUTH_BOT_USERNAME" "YourBot"
-    _ensure_env_default "TELEGRAM_AUTH_BOT_TOKEN" ""
-    _ensure_env_default "TELEGRAM_AUTH_MAX_AGE_SECONDS" "300"
-    _ensure_env_default "TELEGRAM_OIDC_CLIENT_ID" ""
-    _ensure_env_default "TELEGRAM_OIDC_CLIENT_SECRET" ""
-    _ensure_env_default "TELEGRAM_MINI_APP_SHORT_NAME" ""
 
     # Автоматические бэкапы
     _ensure_env_default "APP_BACKUP_ENABLED" "true"
     _ensure_env_default "APP_BACKUP_INTERVAL_DAYS" "7"
     _ensure_env_default "APP_BACKUP_TIME" "03:00"
     _ensure_env_default "APP_BACKUP_COMPONENTS" "db,env,data"
-    _ensure_env_default "APP_BACKUP_TG_ENABLED" "false"
-    _ensure_env_default "APP_BACKUP_TG_ADMIN_IDS" ""
     _ensure_env_default "APP_BACKUP_AZ_ENABLED" "true"
 
     # Ночной перезапуск при простое
@@ -64,7 +52,6 @@ ensure_env_defaults() {
     _ensure_env_default "TRAFFIC_SYNC_ENABLED" "true"
     _ensure_env_default "TRAFFIC_LIMIT_RECONCILE_AFTER_SYNC" "false"
     _ensure_env_default "WG_POLICY_SYNC_ENABLED" "true"
-    _ensure_env_default "MONITOR_ENABLED" "true"
     _ensure_env_default "ACTIVE_WEB_SESSION_TRACKING_ENABLED" "true"
     _ensure_env_default "RUNTIME_BACKUP_CLEANUP_ENABLED" "true"
 
@@ -76,7 +63,6 @@ ensure_env_defaults() {
     _ensure_env_default "FEATURE_SERVER_MONITOR_ENABLED" "true"
     _ensure_env_default "FEATURE_ROUTING_ENABLED" "true"
     _ensure_env_default "FEATURE_EDIT_FILES_ENABLED" "true"
-    _ensure_env_default "FEATURE_TELEGRAM_ENABLED" "true"
     _ensure_env_default "FEATURE_BACKUPS_ENABLED" "true"
     _ensure_env_default "FEATURE_USER_MANAGEMENT_ENABLED" "true"
     _ensure_env_default "FEATURE_SECURITY_ENABLED" "true"
@@ -86,10 +72,6 @@ ensure_env_defaults() {
     _ensure_env_default "FEATURE_MAINTENANCE_ENABLED" "true"
 
     # Мониторинг сервера и vnStat (VNSTAT_IFACE уточняется в adminpanel.sh)
-    _ensure_env_default "MONITOR_CPU_THRESHOLD" "90"
-    _ensure_env_default "MONITOR_RAM_THRESHOLD" "90"
-    _ensure_env_default "MONITOR_CHECK_INTERVAL_SECONDS" "60"
-    _ensure_env_default "MONITOR_COOLDOWN_MINUTES" "30"
     _ensure_env_default "VNSTAT_IFACE" "ens3"
 
     # Лимиты маршрутизации и CIDR

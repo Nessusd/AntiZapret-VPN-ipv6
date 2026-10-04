@@ -35,23 +35,11 @@
 
   #action-logs .audit-user-select { width: 100%; }
 
-  #telegram-auth .tg-audit-filters {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
 
-  #telegram-auth .tg-audit-filters .audit-log-filters__sources {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    gap: 5px;
-    -webkit-overflow-scrolling: touch;
-  }
 
-  #telegram-auth .tg-audit-filters .audit-user-select {
-    width: 100%;
-  }
+
+
+
 }
 
 /* Table: card layout on phones */

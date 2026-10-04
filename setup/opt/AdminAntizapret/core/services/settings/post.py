@@ -10,7 +10,6 @@ from core.services.settings.post_handlers.maintenance import (
 )
 from core.services.settings.post_handlers.qr import handle_qr_settings
 from core.services.settings.post_handlers.security import handle_security_settings
-from core.services.settings.post_handlers.telegram_auth import handle_telegram_auth_settings
 from core.services.settings.post_handlers.users import handle_users_settings
 from core.services.settings.post_handlers.vpn_network import handle_vpn_network_port
 
@@ -85,14 +84,6 @@ def process_settings_post(form, *, session, flash, redirect_url, **deps):
         flash=flash,
         backup_manager_service=deps["backup_manager_service"],
         log_user_action_event=deps["log_user_action_event"],
-    )
-    handle_telegram_auth_settings(
-        form,
-        flash=flash,
-        get_env_value=deps["get_env_value"],
-        set_env_value=deps["set_env_value"],
-        log_user_action_event=deps["log_user_action_event"],
-        log_telegram_audit_event=deps["log_telegram_audit_event"],
     )
     handle_security_settings(
         form,

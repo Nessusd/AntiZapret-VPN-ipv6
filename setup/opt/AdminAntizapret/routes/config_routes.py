@@ -28,8 +28,7 @@ from core.services.traffic_limit import (
     parse_traffic_limit_bytes,
     parse_traffic_limit_period_days,
 )
-from tg_mini.services.config_delivery import build_short_download_name
-from tg_mini.session import has_telegram_mini_session
+from core.services.config_download import build_short_download_name
 
 
 def register_config_routes(
@@ -64,14 +63,10 @@ def register_config_routes(
     set_env_value,
     get_public_download_enabled,
     set_public_download_enabled,
-    log_telegram_audit_event,
     log_user_action_event,
     limiter=None,
     get_client_ip=None,
 ) -> None:
-    def _has_telegram_mini_session() -> bool:
-        return has_telegram_mini_session(session)
-
     def _public_download_limit(fn):
         """Отдельный rate limit на публичный эндпоинт скачивания."""
         if limiter is None:
@@ -166,15 +161,6 @@ def register_config_routes(
 
             reconcile_result = openvpn_reconcile_client_policy(client_name) or {}
             state = reconcile_result.get("state") or {}
-            is_tg_mini_action = _has_telegram_mini_session()
-            if is_tg_mini_action:
-                log_telegram_audit_event(
-                    "mini_openvpn_block_toggle",
-                    config_name=client_name,
-                    details=details_text,
-                )
-                details_text += " via=tg-mini"
-
             log_user_action_event(
                 action_event,
                 target_type="openvpn",
@@ -331,7 +317,9 @@ def register_config_routes(
     def download(file_path, clean_name):
         _ = clean_name
         user = get_current_user(user_model)
-        if user and user.role == "viewer":
+        if not user:
+            abort(403)
+        if user.role == "viewer":
             cfg_type = get_config_type(file_path)
             if cfg_type not in ("openvpn", "wg", "amneziawg"):
                 abort(403)
@@ -424,7 +412,9 @@ def register_config_routes(
     def generate_qr(file_path, clean_name):
         _ = clean_name
         user = get_current_user(user_model)
-        if user and user.role == "viewer":
+        if not user:
+            abort(403)
+        if user.role == "viewer":
             cfg_type = get_config_type(file_path)
             if cfg_type not in ("openvpn", "wg", "amneziawg"):
                 abort(403)
@@ -504,14 +494,6 @@ def register_config_routes(
                 created_by_username=session.get("username"),
                 queued_message="Запуск doall поставлен в очередь",
             )
-            is_tg_mini_action = _has_telegram_mini_session()
-            if is_tg_mini_action:
-                log_telegram_audit_event(
-                    "mini_run_doall",
-                    details=_context or "via=tg-mini",
-                )
-                _context = (_context + "; via=tg-mini") if _context else "via=tg-mini"
-
             log_user_action_event(
                 "settings_run_doall",
                 target_type="maintenance",

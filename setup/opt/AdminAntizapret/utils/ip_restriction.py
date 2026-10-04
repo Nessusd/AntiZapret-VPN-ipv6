@@ -1,7 +1,6 @@
 # ip_restriction.py
 import ipaddress
 import os
-import tempfile
 import time
 from threading import Lock
 from pathlib import Path
@@ -12,6 +11,7 @@ from markupsafe import escape
 from core.services.panel_publish_info import is_whitelist_port_firewall_applicable
 from ip_blocked.constants import IP_BLOCKED_ACCESS_ENDPOINTS
 from utils.panel_port_firewall import PanelPortFirewall
+from utils.env_file import update_env_file
 from utils.scanner_firewall_store import ScannerFirewallStore
 from utils.temporary_whitelist_store import (
     DURATION_LABELS,
@@ -166,22 +166,6 @@ class IPRestriction:
 
         return False
 
-    def _atomic_write_lines(self, file_path, lines):
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix=f".{file_path.name}.", dir=str(file_path.parent), text=True)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temp_path, file_path)
-        finally:
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except OSError:
-                pass
-
     def _normalize_ip_entry(self, ip_or_network):
         value = (ip_or_network or '').strip()
         if not value:
@@ -224,32 +208,7 @@ class IPRestriction:
 
     def _apply_env_updates(self, updates):
         """Обновляет несколько ключей в .env одной записью."""
-        env_file = self._resolve_env_file()
-
-        if env_file.exists():
-            with env_file.open('r', encoding='utf-8') as f:
-                lines = f.readlines()
-        else:
-            lines = []
-
-        remaining = dict(updates)
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            matched_key = None
-            for key in list(remaining.keys()):
-                if stripped.startswith(f"{key}="):
-                    new_lines.append(f"{key}={remaining.pop(key)}\n")
-                    matched_key = key
-                    break
-            if matched_key is None:
-                new_lines.append(line)
-
-        for key, value in remaining.items():
-            new_lines.append(f"{key}={value}\n")
-
-        self._atomic_write_lines(env_file, new_lines)
-
+        update_env_file(self._resolve_env_file(), updates)
         for key, value in updates.items():
             os.environ[key] = value
 

@@ -20,8 +20,6 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(120), nullable=False)
-    telegram_id = db.Column(db.String(32), unique=True, nullable=True, index=True)
-    tg_notify_events = db.Column(db.Text, nullable=True, default=None)
     role = db.Column(db.String(20), nullable=False, default="admin", index=True)
     allowed_configs = db.relationship(
         "ViewerConfigAccess",
@@ -38,16 +36,6 @@ class User(db.Model):
 
     def is_admin(self):
         return self.role == "admin"
-
-    def get_tg_notify_events(self):
-        import json as _json
-        try:
-            return _json.loads(self.tg_notify_events or "{}")
-        except (ValueError, TypeError):
-            return {}
-
-    def has_tg_notify_event(self, event_type):
-        return bool(self.get_tg_notify_events().get(event_type, False))
 
 
 class QrDownloadToken(db.Model):
@@ -77,21 +65,6 @@ class QrDownloadAuditLog(db.Model):
     remote_addr = db.Column(db.String(64), nullable=True)
     user_agent = db.Column(db.String(255), nullable=True)
     details = db.Column(db.String(255), nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow, index=True)
-
-
-class TelegramMiniAuditLog(db.Model):
-    __tablename__ = "telegram_mini_audit_log"
-
-    id = db.Column(db.Integer, primary_key=True)
-    actor_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
-    actor_username = db.Column(db.String(80), nullable=True, index=True)
-    telegram_id = db.Column(db.String(32), nullable=True, index=True)
-    event_type = db.Column(db.String(64), nullable=False, index=True)
-    config_name = db.Column(db.String(255), nullable=True)
-    details = db.Column(db.String(255), nullable=True)
-    remote_addr = db.Column(db.String(64), nullable=True)
-    user_agent = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utcnow, index=True)
 
 

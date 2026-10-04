@@ -391,36 +391,6 @@
   line-height: 1.35;
 }
 
-/* ----- Telegram recipients (compact chips) ----- */
-
-#maintenance .maintenance-recipient-field__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
-}
-
-#maintenance .maintenance-recipient-field__label {
-  margin: 0;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--mnt-text);
-}
-
-#maintenance .maintenance-recipient-field__count {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--mnt-muted);
-  letter-spacing: 0.03em;
-}
-
-#maintenance .maintenance-recipient-hint {
-  margin: 0 0 0.45rem;
-  font-size: 0.74rem;
-  color: var(--mnt-muted);
-  line-height: 1.35;
-}
 
 #maintenance .maintenance-callout--compact {
   padding: 0.55rem 0.7rem;
@@ -431,99 +401,6 @@
   font-size: 0.8rem;
 }
 
-#maintenance .maintenance-recipient-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  padding: 0.5rem;
-  border-radius: 10px;
-  border: 1px solid var(--mnt-border);
-  background: rgba(22, 30, 36, 0.55);
-  min-height: 2.25rem;
-}
-
-#maintenance .maintenance-recipient-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  max-width: 100%;
-  padding: 0.2rem 0.45rem 0.2rem 0.55rem;
-  border-radius: 999px;
-  border: 1px dashed rgba(84, 102, 115, 0.65);
-  background: transparent;
-  font-size: 0.78rem;
-  line-height: 1.2;
-  color: var(--mnt-muted);
-  cursor: pointer;
-  user-select: none;
-  transition:
-    border-color 0.12s ease,
-    background 0.12s ease,
-    color 0.12s ease,
-    padding 0.12s ease;
-}
-
-#maintenance .maintenance-recipient-chip:hover {
-  border-color: var(--mnt-info-border);
-  color: var(--mnt-text);
-}
-
-#maintenance .maintenance-recipient-chip.is-on,
-#maintenance .maintenance-recipient-chip:has(.maintenance-recipient-chip__input:checked) {
-  border-style: solid;
-  border-color: var(--mnt-info-border);
-  background: var(--mnt-info-soft);
-  color: var(--mnt-text);
-  padding-right: 0.35rem;
-}
-
-#maintenance .maintenance-recipient-chip__input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
-}
-
-#maintenance .maintenance-recipient-chip__name {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 9rem;
-}
-
-#maintenance .maintenance-recipient-chip__action {
-  display: none;
-  width: 1rem;
-  height: 1rem;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: rgba(213, 103, 95, 0.2);
-  color: var(--mnt-danger);
-  font-size: 0.72rem;
-  line-height: 1rem;
-  text-align: center;
-}
-
-#maintenance .maintenance-recipient-chip__action::before {
-  content: "×";
-  font-weight: 700;
-}
-
-#maintenance .maintenance-recipient-chip.is-on .maintenance-recipient-chip__action,
-#maintenance .maintenance-recipient-chip:has(.maintenance-recipient-chip__input:checked) .maintenance-recipient-chip__action {
-  display: inline-block;
-}
-
-#maintenance .maintenance-recipient-chip.is-on:hover,
-#maintenance .maintenance-recipient-chip:has(.maintenance-recipient-chip__input:checked):hover {
-  border-color: var(--mnt-danger-border);
-  background: var(--mnt-danger-soft);
-}
 
 /* ----- Range controls (maintenance palette) ----- */
 
@@ -720,15 +597,6 @@
   background: rgba(30, 41, 48, 0.7);
 }
 
-#maintenance .maintenance-backup-action-card--tg {
-  border-color: var(--mnt-info-border);
-  background: var(--mnt-info-soft);
-}
-
-#maintenance .maintenance-backup-action-card--tg:hover {
-  border-color: var(--mnt-info);
-  background: rgba(90, 157, 203, 0.2);
-}
 
 #maintenance .maintenance-backup-action-card__title {
   margin: 0;
@@ -767,32 +635,6 @@
   }
 }
 
-#maintenance .maintenance-backup-btn--tg {
-  border-color: var(--mnt-info-border);
-  background: rgba(56, 189, 248, 0.12);
-  color: var(--mnt-text);
-}
-
-#maintenance .maintenance-backup-btn--tg:hover:not(:disabled) {
-  border-color: var(--mnt-info);
-  background: rgba(56, 189, 248, 0.22);
-}
-
-#maintenance .maintenance-backup-btn__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.65rem;
-  margin-right: 0.35rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  vertical-align: middle;
-  background: var(--mnt-info);
-  color: #0f1720;
-}
 
 #maintenance .maintenance-backup-action-card__note {
   margin: 0;

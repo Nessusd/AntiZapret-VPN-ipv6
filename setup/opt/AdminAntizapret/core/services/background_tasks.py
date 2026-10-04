@@ -27,11 +27,6 @@ _TASK_START_PROGRESS: dict[str, tuple[str, str, int]] = {
         "Резервная копия: подготовка файлов…",
         5,
     ),
-    "app_backup_test_tg": (
-        "Резервная копия: отправка в Telegram…",
-        "Резервная копия: создание архива для Telegram…",
-        5,
-    ),
     "logs_dashboard_refresh": (
         "Обновление панели логов…",
         "Обновление панели логов…",
@@ -43,7 +38,6 @@ _TASK_DONE_PROGRESS: dict[str, str] = {
     "run_doall": "AntiZapret: изменения применены",
     "restart_service": "Служба AdminAntizapret перезапущена",
     "app_backup_create": "Резервная копия создана",
-    "app_backup_test_tg": "Бэкап отправлен в Telegram",
     "logs_dashboard_refresh": "Панель логов обновлена",
 }
 
@@ -52,7 +46,6 @@ _TASK_STALE_SECONDS: dict[str, int] = {
     "restart_service": 300,
     "run_doall": 300,
     "app_backup_create": 3600,
-    "app_backup_test_tg": 3600,
 }
 
 _DEFAULT_TASK_STALE_SECONDS = 3600

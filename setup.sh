@@ -417,15 +417,48 @@ configure_panel_transaction_scope() {
 read_panel_env_value() {
 	local key=$1 env_file="$PANEL_INSTALL_DIR/.env"
 	[[ -f "$env_file" ]] || return 0
-	sed -n "s/^${key}=//p" "$env_file" | tail -n 1
+	# Читаем dotenv как данные, не выполняя подстановки или команды из файла.
+	awk -v key="$key" '
+		function trim(value) {
+			sub(/^[[:space:]]+/, "", value)
+			sub(/[[:space:]]+$/, "", value)
+			return value
+		}
+		{
+			line = trim($0)
+			sub(/^export[[:space:]]+/, "", line)
+			equals = index(line, "=")
+			if (!equals || trim(substr(line, 1, equals - 1)) != key) next
+			value = trim(substr(line, equals + 1))
+			quote = substr(value, 1, 1)
+			if (quote == "\"" || quote == sprintf("%c", 39)) {
+				end = index(substr(value, 2), quote)
+				if (!end) next
+				suffix = trim(substr(value, end + 2))
+				if (suffix != "" && substr(suffix, 1, 1) != "#") next
+				value = substr(value, 2, end - 1)
+			} else {
+				sub(/[[:space:]]+#.*$/, "", value)
+				value = trim(value)
+			}
+			result = value
+			found = 1
+		}
+		END { if (found) print result }
+	' "$env_file"
+}
+
+panel_env_is_true() {
+	local value
+	value="$(read_panel_env_value "$1")" || return 1
+	# Gunicorn включает TLS только для true, без учёта регистра.
+	[[ "${value,,}" == 'true' ]]
 }
 
 panel_reserves_public_http_ports() {
-	local use_https
 	[[ "$PANEL_MODE" == 'nginx-letsencrypt' ]] && return 0
 	[[ "$PANEL_MODE" == 'preserve' ]] || return 1
-	use_https="$(read_panel_env_value USE_HTTPS)"
-	[[ "${use_https,,}" == 'false' ]] && panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN"
+	! panel_env_is_true USE_HTTPS && panel_domain_is_valid "$PANEL_PREVIOUS_DOMAIN"
 }
 
 prompt_panel_configuration() {
@@ -457,7 +490,7 @@ prompt_panel_configuration() {
 	echo '    5) HTTPS with an existing certificate and key'
 	PANEL_MODE_CHOICE=
 	until [[ "$PANEL_MODE_CHOICE" =~ ^[1-5]$ ]]; do
-		read -rp 'Panel mode [1-5]: ' -e -i 1 PANEL_MODE_CHOICE
+		read -rp 'Panel mode [1-5]: ' -e -i 1 PANEL_MODE_CHOICE || exit 1
 	done
 	case "$PANEL_MODE_CHOICE" in
 		1) PANEL_MODE=selfsigned ;;
@@ -470,7 +503,7 @@ prompt_panel_configuration() {
 	current_port=$PANEL_PORT
 	while true; do
 		PANEL_PORT=
-		read -rp 'AdminAntizapret port [1-65535]: ' -e -i "$current_port" PANEL_PORT
+		read -rp 'AdminAntizapret port [1-65535]: ' -e -i "$current_port" PANEL_PORT || exit 1
 		if [[ ! "$PANEL_PORT" =~ ^[0-9]+$ ]] ||
 			(( 10#$PANEL_PORT < 1 || 10#$PANEL_PORT > 65535 ))
 		then
@@ -495,43 +528,85 @@ prompt_panel_configuration() {
 		letsencrypt|nginx-letsencrypt)
 			PANEL_DOMAIN=
 			until panel_domain_is_valid "$PANEL_DOMAIN"; do
-				read -rp 'Panel domain: ' PANEL_DOMAIN
+				read -rp 'Panel domain: ' PANEL_DOMAIN || exit 1
 			done
-			read -rp "Let's Encrypt email (optional): " PANEL_EMAIL
+			read -rp "Let's Encrypt email (optional): " PANEL_EMAIL || exit 1
 			;;
 		custom)
 			PANEL_DOMAIN=
 			until panel_domain_is_valid "$PANEL_DOMAIN"; do
-				read -rp 'Panel domain: ' PANEL_DOMAIN
+				read -rp 'Panel domain: ' PANEL_DOMAIN || exit 1
 			done
 			until [[ -f "$PANEL_CERT_PATH" ]]; do
-				read -rp 'Full path to the TLS certificate: ' PANEL_CERT_PATH
+				read -rp 'Full path to the TLS certificate: ' PANEL_CERT_PATH || exit 1
 			done
 			until [[ -f "$PANEL_KEY_PATH" ]]; do
-				read -rp 'Full path to the TLS private key: ' PANEL_KEY_PATH
+				read -rp 'Full path to the TLS private key: ' PANEL_KEY_PATH || exit 1
 			done
 			;;
 	esac
 }
 
-set_panel_env_value() {
-	local key=$1 value=$2 env_file="$PANEL_INSTALL_DIR/.env" temporary
-	temporary="$(mktemp "${env_file}.XXXXXX")" || return 1
-	if [[ -f "$env_file" ]]; then
-		sed "/^${key}=/d" "$env_file" > "$temporary" || return 1
+update_panel_env_file() (
+	local operation=$1 key=${2:-} value=${3:-} env_file lock_fd temporary=''
+	# Тот же постоянный lock-файл использует панель. Блокируем весь read-modify-write,
+	# а не сам .env: атомарная замена меняет его inode.
+	env_file="$(realpath -m -- "$PANEL_INSTALL_DIR/.env")" || return 1
+	umask 077
+	exec {lock_fd}>>"${env_file}.lock" || return 1
+	flock "$lock_fd" || return 1
+	trap '[[ -z "$temporary" ]] || rm -f -- "$temporary"' EXIT
+	if [[ "$operation" != 'set' && ! -f "$env_file" ]]; then
+		return 0
 	fi
-	printf '%s=%s\n' "$key" "$value" >> "$temporary" || return 1
-	chmod 600 "$temporary" || return 1
-	mv -f -- "$temporary" "$env_file"
+	if [[ "$operation" == 'set' || "$operation" == 'unset' ]]; then
+		[[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || return 1
+	fi
+	temporary="$(mktemp "${env_file}.XXXXXX")" || return 1
+	case "$operation" in
+		set|unset)
+			if [[ -f "$env_file" ]]; then
+				awk -v key="$key" '
+					{
+						line = $0
+						sub(/^[[:space:]]*(export[[:space:]]+)?/, "", line)
+						if (line !~ ("^" key "[[:space:]]*=")) print
+					}
+				' "$env_file" > "$temporary" || return 1
+			fi
+			if [[ "$operation" == 'set' ]]; then
+				printf '%s=%s\n' "$key" "$value" >> "$temporary" || return 1
+			fi
+			;;
+		retired)
+			# Only panel integration settings are retired; native TELEGRAM_INCLUDE stays.
+			sed -E -e '/^[[:space:]]*(export[[:space:]]+)?TELEGRAM_INCLUDE[[:space:]]*=/b' \
+				-e '/^[[:space:]]*(export[[:space:]]+)?(TELEGRAM_[A-Z0-9_]+|APP_BACKUP_TG_[A-Z0-9_]+|FEATURE_TELEGRAM_ENABLED|MONITOR_ENABLED|MONITOR_CPU_THRESHOLD|MONITOR_RAM_THRESHOLD|MONITOR_CHECK_INTERVAL_SECONDS|MONITOR_COOLDOWN_MINUTES)[[:space:]]*=/d' \
+				"$env_file" > "$temporary" || return 1
+			;;
+		*) return 1 ;;
+	esac
+	if [[ -f "$env_file" ]]; then
+		chown --reference="$env_file" "$temporary" || return 1
+		chmod --reference="$env_file" "$temporary" || return 1
+	else
+		chmod 600 "$temporary" || return 1
+	fi
+	sync -f "$temporary" || return 1
+	mv -f -- "$temporary" "$env_file" || return 1
+	temporary=''
+)
+
+set_panel_env_value() {
+	update_panel_env_file set "$1" "$2"
 }
 
 unset_panel_env_value() {
-	local key=$1 env_file="$PANEL_INSTALL_DIR/.env" temporary
-	[[ -f "$env_file" ]] || return 0
-	temporary="$(mktemp "${env_file}.XXXXXX")" || return 1
-	sed "/^${key}=/d" "$env_file" > "$temporary" || return 1
-	chmod 600 "$temporary" || return 1
-	mv -f -- "$temporary" "$env_file"
+	update_panel_env_file unset "$1"
+}
+
+remove_retired_panel_settings() {
+	update_panel_env_file retired
 }
 
 panel_public_ipv6() {
@@ -560,6 +635,7 @@ configure_panel_environment() {
 	# shellcheck disable=SC1091
 	source "$PANEL_INSTALL_DIR/script_sh/env_defaults.sh"
 	ensure_env_defaults
+	remove_retired_panel_settings
 
 	if ! grep -q '^SECRET_KEY=.' "$PANEL_INSTALL_DIR/.env"; then
 		secret_key="$(openssl rand -hex 32)"
@@ -899,7 +975,7 @@ validate_panel_runtime() {
 	local bind_ipv6 panel_port scheme status
 	panel_port="$(read_panel_env_value APP_PORT)"
 	[[ "$panel_port" =~ ^[0-9]+$ ]] || return 1
-	if [[ "$(read_panel_env_value USE_HTTPS)" == 'true' ]]; then
+	if panel_env_is_true USE_HTTPS; then
 		scheme=https
 	else
 		scheme=http
@@ -1930,32 +2006,32 @@ fi
 
 # Спрашиваем о настройках
 until [[ "$OPENVPN_UDP_ENABLE" =~ ^[yn]$ ]]; do
-	read -rp 'Enable OpenVPN UDP? [y/n]: ' -e -i y OPENVPN_UDP_ENABLE
+	read -rp 'Enable OpenVPN UDP? [y/n]: ' -e -i y OPENVPN_UDP_ENABLE || exit 1
 done
 echo
 until [[ "$OPENVPN_TCP_ENABLE" =~ ^[yn]$ ]]; do
-	read -rp 'Enable OpenVPN TCP? [y/n]: ' -e -i n OPENVPN_TCP_ENABLE
+	read -rp 'Enable OpenVPN TCP? [y/n]: ' -e -i n OPENVPN_TCP_ENABLE || exit 1
 done
 echo
 until [[ "$WIREGUARD_ENABLE" =~ ^[yn]$ ]]; do
-	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE
+	read -rp 'Enable WireGuard/AmneziaWG? [y/n]: ' -e -i y WIREGUARD_ENABLE || exit 1
 done
 echo
 until [[ "$INSTALL_PANEL" =~ ^[yn]$ ]]; do
-	read -rp 'Install AdminAntizapret panel? [y/n]: ' -e -i y INSTALL_PANEL
+	read -rp 'Install AdminAntizapret panel? [y/n]: ' -e -i y INSTALL_PANEL || exit 1
 done
 PANEL_RECONFIGURE=y
 if [[ "$INSTALL_PANEL" == 'y' && -f "$PANEL_INSTALL_DIR/.antizapret-integrated" ]]; then
 	PANEL_RECONFIGURE=
 	until [[ "$PANEL_RECONFIGURE" =~ ^[yn]$ ]]; do
-		read -rp 'Reconfigure the existing AdminAntizapret panel? [y/n]: ' -e -i n PANEL_RECONFIGURE
+		read -rp 'Reconfigure the existing AdminAntizapret panel? [y/n]: ' -e -i n PANEL_RECONFIGURE || exit 1
 	done
 fi
 prompt_panel_configuration
 configure_panel_transaction_scope
 echo
 until [[ "$BGP_ENABLE" =~ ^[yn]$ ]]; do
-	read -rp 'Enable private BGP route delivery for router clients? [y/n]: ' -e -i "$OLD_BGP_ENABLE" BGP_ENABLE
+	read -rp 'Enable private BGP route delivery for router clients? [y/n]: ' -e -i "$OLD_BGP_ENABLE" BGP_ENABLE || exit 1
 done
 is_private_asn() {
 	[[ "$1" =~ ^[0-9]{1,10}$ ]] || return 1
@@ -1969,10 +2045,10 @@ if [[ "$BGP_ENABLE" == 'y' ]]; then
 		exit 11
 	fi
 	until is_private_asn "$BGP_SERVER_ASN"; do
-		read -rp 'Private ASN for the AntiZapret BGP server: ' -e -i "$OLD_BGP_SERVER_ASN" BGP_SERVER_ASN
+		read -rp 'Private ASN for the AntiZapret BGP server: ' -e -i "$OLD_BGP_SERVER_ASN" BGP_SERVER_ASN || exit 1
 	done
 	until is_private_asn "$BGP_CLIENT_ASN" && [[ "$BGP_CLIENT_ASN" != "$BGP_SERVER_ASN" ]]; do
-		read -rp 'Private ASN used by BGP clients: ' -e -i "$OLD_BGP_CLIENT_ASN" BGP_CLIENT_ASN
+		read -rp 'Private ASN used by BGP clients: ' -e -i "$OLD_BGP_CLIENT_ASN" BGP_CLIENT_ASN || exit 1
 	done
 else
 	BGP_SERVER_ASN="$OLD_BGP_SERVER_ASN"
@@ -1980,7 +2056,7 @@ else
 fi
 echo
 until [[ "$DISABLE_IPV6" =~ ^[yn]$ ]]; do
-	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6
+	read -rp 'Disable IPv6 on this server? [y/n]: ' -e -i n DISABLE_IPV6 || exit 1
 done
 VPN_IPV6_PREFIX="${ENV_VPN_IPV6_PREFIX:-${ENV_WIREGUARD_IPV6_PREFIX:-${OLD_VPN_IPV6_PREFIX:-fd3a:c9bc:6bcb::/48}}}"
 read_ipv6_details() {
@@ -2910,20 +2986,20 @@ echo '    0) None        - Do not install anti-censorship patch, or remove if al
 echo '    1) Strong      - Recommended by default'
 echo '    2) Error-free  - Use if Strong patch causes connection error, recommended for Mikrotik routers'
 until [[ "$OPENVPN_PATCH" =~ ^[0-2]$ ]]; do
-	read -rp 'Version choice [0-2]: ' -e -i 1 OPENVPN_PATCH
+	read -rp 'Version choice [0-2]: ' -e -i 1 OPENVPN_PATCH || exit 1
 done
 echo
 echo 'OpenVPN DCO lowers CPU load, boosts data speeds, and only supports AES-128-GCM, AES-256-GCM and CHACHA20-POLY1305 encryption'
 until [[ "$OPENVPN_DCO" =~ ^[yn]$ ]]; do
-	read -rp 'Turn on OpenVPN DCO? [y/n]: ' -e -i y OPENVPN_DCO
+	read -rp 'Turn on OpenVPN DCO? [y/n]: ' -e -i y OPENVPN_DCO || exit 1
 done
 echo
 until [[ "$ANTIZAPRET_WARP" =~ ^[yn]$ ]]; do
-	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002AntiZapret VPN\e[0m\002 (antizapret-*) outbound traffic? [y/n]: ' -e -i n ANTIZAPRET_WARP
+	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002AntiZapret VPN\e[0m\002 (antizapret-*) outbound traffic? [y/n]: ' -e -i n ANTIZAPRET_WARP || exit 1
 done
 echo
 until [[ "$VPN_WARP" =~ ^[yn]$ ]]; do
-	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002full VPN\e[0m\002 (vpn-*) outbound traffic? [y/n]: ' -e -i n VPN_WARP
+	read -rp $'Use Cloudflare WARP for \001\e[1;32m\002full VPN\e[0m\002 (vpn-*) outbound traffic? [y/n]: ' -e -i n VPN_WARP || exit 1
 done
 echo
 echo -e 'Choose DNS resolvers for \e[1;32mAntiZapret VPN\e[0m (antizapret-*):'
@@ -2936,7 +3012,7 @@ echo
 echo ' ** - Enable additional proxying and hide this server IP on some internet resources'
 echo '      Use only if this server is geolocated in Russia or problems accessing some internet resources'
 until [[ "$ANTIZAPRET_DNS" =~ ^[1-6]$ ]]; do
-	read -rp 'DNS choice [1,3-6]: ' -e -i 1 ANTIZAPRET_DNS
+	read -rp 'DNS choice [1,3-6]: ' -e -i 1 ANTIZAPRET_DNS || exit 1
 done
 echo
 echo -e 'Choose DNS resolvers for \e[1;32mfull VPN\e[0m (vpn-*):'
@@ -2953,24 +3029,24 @@ echo '  * - DNS resolvers support EDNS Client Subnet'
 echo ' ** - Enable additional proxying and hide this server IP on some internet resources'
 echo '      Use only if this server is geolocated in Russia or problems accessing some internet resources'
 until [[ "$VPN_DNS" =~ ^[1-8]$ ]]; do
-	read -rp 'DNS choice [1-8]: ' -e -i 1 VPN_DNS
+	read -rp 'DNS choice [1-8]: ' -e -i 1 VPN_DNS || exit 1
 done
 echo
 until [[ "$BLOCK_ADS" =~ ^[yn]$ ]]; do
-	read -rp $'Enable blocking ads, trackers, malware and phishing websites in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 (antizapret-*) based on AdGuard and OISD rules? [y/n]: ' -e -i y BLOCK_ADS
+	read -rp $'Enable blocking ads, trackers, malware and phishing websites in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 (antizapret-*) based on AdGuard and OISD rules? [y/n]: ' -e -i y BLOCK_ADS || exit 1
 done
 echo
 echo 'Default CLIENT IP address range:     10.28.0.0/15'
 echo 'Alternative CLIENT IP address range: 172.28.0.0/15'
 until [[ "$ALTERNATIVE_CLIENT_IP" =~ ^[yn]$ ]]; do
-	read -rp 'Use alternative CLIENT IP address range? [y/n]: ' -e -i n ALTERNATIVE_CLIENT_IP
+	read -rp 'Use alternative CLIENT IP address range? [y/n]: ' -e -i n ALTERNATIVE_CLIENT_IP || exit 1
 done
 echo
 [[ "$ALTERNATIVE_CLIENT_IP" == 'y' ]] && IP=172 || IP=10
 echo "Default FAKE IP address range:     $IP.30.0.0/15"
 echo 'Alternative FAKE IP address range: 198.18.0.0/15'
 until [[ "$ALTERNATIVE_FAKE_IP" =~ ^[yn]$ ]]; do
-	read -rp 'Use alternative range of FAKE IP addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IP
+	read -rp 'Use alternative range of FAKE IP addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IP || exit 1
 done
 echo
 if command -v sipcalc >/dev/null; then
@@ -2981,12 +3057,12 @@ fi
 echo "Default FAKE IPv6 address range:     $DEFAULT_FAKE_IPV6_NETWORK"
 echo 'Alternative FAKE IPv6 address range: 2001:2::/48'
 until [[ "$ALTERNATIVE_FAKE_IPV6" =~ ^[yn]$ ]]; do
-	read -rp 'Use alternative range of FAKE IPv6 addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IPV6
+	read -rp 'Use alternative range of FAKE IPv6 addresses? [y/n]: ' -e -i y ALTERNATIVE_FAKE_IPV6 || exit 1
 done
 echo
 while true; do
 	until [[ "$OPENVPN_BACKUP_TCP" =~ ^[yn]$ ]]; do
-		read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP
+		read -rp 'Use TCP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i n OPENVPN_BACKUP_TCP || exit 1
 	done
 	if [[ "$INSTALL_PANEL" == 'y' && "$OPENVPN_BACKUP_TCP" == 'y' ]] &&
 		{ panel_reserves_public_http_ports || [[ "$PANEL_PORT" == 80 || "$PANEL_PORT" == 443 ]]; }
@@ -2999,47 +3075,47 @@ while true; do
 done
 echo
 until [[ "$OPENVPN_BACKUP_UDP" =~ ^[yn]$ ]]; do
-	read -rp 'Use UDP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i y OPENVPN_BACKUP_UDP
+	read -rp 'Use UDP ports 80, 443, 504, 508 as backup for OpenVPN connections? [y/n]: ' -e -i y OPENVPN_BACKUP_UDP || exit 1
 done
 echo
 until [[ "$WIREGUARD_BACKUP" =~ ^[yn]$ ]]; do
-	read -rp 'Use UDP ports 540, 580 as backup for WireGuard/AmneziaWG connections? [y/n]: ' -e -i y WIREGUARD_BACKUP
+	read -rp 'Use UDP ports 540, 580 as backup for WireGuard/AmneziaWG connections? [y/n]: ' -e -i y WIREGUARD_BACKUP || exit 1
 done
 echo
 until [[ "$OPENVPN_DUPLICATE" =~ ^[yn]$ ]]; do
-	read -rp 'Allow multiple clients connecting to OpenVPN using same profile file (*.ovpn)? [y/n]: ' -e -i y OPENVPN_DUPLICATE
+	read -rp 'Allow multiple clients connecting to OpenVPN using same profile file (*.ovpn)? [y/n]: ' -e -i y OPENVPN_DUPLICATE || exit 1
 done
 echo
 until [[ "$OPENVPN_LOG" =~ ^[yn]$ ]]; do
-	read -rp 'Enable detailed logs in OpenVPN? [y/n]: ' -e -i n OPENVPN_LOG
+	read -rp 'Enable detailed logs in OpenVPN? [y/n]: ' -e -i n OPENVPN_LOG || exit 1
 done
 echo
 echo 'Warning! SSH protection may block your IP after 5 logins/minute!'
 until [[ "$SSH_PROTECTION" =~ ^[yn]$ ]]; do
-	read -rp 'Enable SSH brute-force protection? [y/n]: ' -e -i y SSH_PROTECTION
+	read -rp 'Enable SSH brute-force protection? [y/n]: ' -e -i y SSH_PROTECTION || exit 1
 done
 echo
 echo 'Warning! Attack protection may block VPN or third-party applications!'
 until [[ "$ATTACK_PROTECTION" =~ ^[yn]$ ]]; do
-	read -rp 'Enable network attack protection? [y/n]: ' -e -i y ATTACK_PROTECTION
+	read -rp 'Enable network attack protection? [y/n]: ' -e -i y ATTACK_PROTECTION || exit 1
 done
 echo
 echo 'Warning! Scan protection blocks ping and closed-port replies!'
 until [[ "$SCAN_PROTECTION" =~ ^[yn]$ ]]; do
-	read -rp 'Enable network scan protection? [y/n]: ' -e -i y SCAN_PROTECTION
+	read -rp 'Enable network scan protection? [y/n]: ' -e -i y SCAN_PROTECTION || exit 1
 done
 echo
 echo 'Warning! Torrent guard blocks VPN traffic for 1 minute on torrent detection!'
 until [[ "$TORRENT_GUARD" =~ ^[yn]$ ]]; do
-	read -rp $'Enable torrent guard for \001\e[1;32m\002full VPN\001\e[0m\002? [y/n]: ' -e -i y TORRENT_GUARD
+	read -rp $'Enable torrent guard for \001\e[1;32m\002full VPN\001\e[0m\002? [y/n]: ' -e -i y TORRENT_GUARD || exit 1
 done
 echo
 until [[ "$RESTRICT_FORWARD" =~ ^[yn]$ ]]; do
-	read -rp $'Restrict forwarding in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 to IPs from config/forward-ips.txt and result/route-ips.txt? [y/n]: ' -e -i y RESTRICT_FORWARD
+	read -rp $'Restrict forwarding in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002 to IPs from config/forward-ips.txt and result/route-ips.txt? [y/n]: ' -e -i y RESTRICT_FORWARD || exit 1
 done
 echo
 until [[ "$CLIENT_ISOLATION" =~ ^[yn]$ ]]; do
-	read -rp $'Enable \001\e[1;32m\002all VPN\001\e[0m\002 client and server isolation? [y/n]: ' -e -i y CLIENT_ISOLATION
+	read -rp $'Enable \001\e[1;32m\002all VPN\001\e[0m\002 client and server isolation? [y/n]: ' -e -i y CLIENT_ISOLATION || exit 1
 done
 echo
 
@@ -3079,16 +3155,16 @@ warn_endpoint_families() {
 	endpoint_has_native_ipv6 "$host" || echo "Warning: $service endpoint $host has no native IPv6 address"
 }
 
-while read -rp 'Enter a resolvable domain name or IP address for this OpenVPN server, or press Enter to use server IPv4: ' -e OPENVPN_HOST
-do
+while true; do
+	read -rp 'Enter a resolvable domain name or IP address for this OpenVPN server, or press Enter to use server IPv4: ' -e OPENVPN_HOST || exit 1
 	[[ -z "$OPENVPN_HOST" ]] && break
 	OPENVPN_HOST="$(normalize_endpoint_host "$OPENVPN_HOST")"
 	endpoint_is_usable "$OPENVPN_HOST" && break
 done
 warn_endpoint_families "$OPENVPN_HOST" OpenVPN
 echo
-while read -rp 'Enter a resolvable domain name or IP address for this WireGuard/AmneziaWG server, or press Enter to use server IPv4: ' -e WIREGUARD_HOST
-do
+while true; do
+	read -rp 'Enter a resolvable domain name or IP address for this WireGuard/AmneziaWG server, or press Enter to use server IPv4: ' -e WIREGUARD_HOST || exit 1
 	[[ -z "$WIREGUARD_HOST" ]] && break
 	WIREGUARD_HOST="$(normalize_endpoint_host "$WIREGUARD_HOST")"
 	endpoint_is_usable "$WIREGUARD_HOST" && break
@@ -3096,53 +3172,49 @@ done
 warn_endpoint_families "$WIREGUARD_HOST" WireGuard/AmneziaWG
 echo
 until [[ "$ROUTE_ALL" =~ ^[yn]$ ]]; do
-	read -rp $'Route all traffic for domains via \001\e[1;32m\002AntiZapret VPN\001\e[0m\002, excluding Russian domains and domains from config/exclude-hosts.txt? [y/n]: ' -e -i n ROUTE_ALL
-done
-echo
-until [[ "$DISCORD_INCLUDE" =~ ^[yn]$ ]]; do
-	read -rp $'Obsolete! Include Discord voice IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n DISCORD_INCLUDE
+	read -rp $'Route all traffic for domains via \001\e[1;32m\002AntiZapret VPN\001\e[0m\002, excluding Russian domains and domains from config/exclude-hosts.txt? [y/n]: ' -e -i n ROUTE_ALL || exit 1
 done
 echo
 until [[ "$CLOUDFLARE_INCLUDE" =~ ^[yn]$ ]]; do
-	read -rp $'Include Cloudflare IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y CLOUDFLARE_INCLUDE
+	read -rp $'Include Cloudflare IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y CLOUDFLARE_INCLUDE || exit 1
 done
 echo
 until [[ "$TELEGRAM_INCLUDE" =~ ^[yn]$ ]]; do
-	read -rp $'Include Telegram IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y TELEGRAM_INCLUDE
+	read -rp $'Include Telegram IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y TELEGRAM_INCLUDE || exit 1
 done
 echo
 until [[ "$WHATSAPP_INCLUDE" =~ ^[yn]$ ]]; do
-	read -rp $'Include WhatsApp IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y WHATSAPP_INCLUDE
+	read -rp $'Include WhatsApp IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i y WHATSAPP_INCLUDE || exit 1
 done
 echo
 until [[ "$ROBLOX_INCLUDE" =~ ^[yn]$ ]]; do
-	read -rp $'Include Roblox IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n ROBLOX_INCLUDE
+	read -rp $'Include Roblox IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n ROBLOX_INCLUDE || exit 1
 done
 echo
-#until [[ "$AMAZON_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include Amazon IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AMAZON_INCLUDE
-#done
-#echo
-#until [[ "$HETZNER_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include Hetzner IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n HETZNER_INCLUDE
-#done
-#echo
-#until [[ "$DIGITALOCEAN_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include DigitalOcean IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n DIGITALOCEAN_INCLUDE
-#done
-#echo
-#until [[ "$OVH_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include OVH IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n OVH_INCLUDE
-#done
-#echo
-#until [[ "$GOOGLE_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include Google IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n GOOGLE_INCLUDE
-#done
-#echo
-#until [[ "$AKAMAI_INCLUDE" =~ ^[yn]$ ]]; do
-#	read -rp $'Include Akamai IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AKAMAI_INCLUDE
-#done
-#echo
+until [[ "$AMAZON_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include Amazon IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AMAZON_INCLUDE || exit 1
+done
+echo
+until [[ "$HETZNER_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include Hetzner IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n HETZNER_INCLUDE || exit 1
+done
+echo
+until [[ "$DIGITALOCEAN_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include DigitalOcean IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n DIGITALOCEAN_INCLUDE || exit 1
+done
+echo
+until [[ "$OVH_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include OVH IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n OVH_INCLUDE || exit 1
+done
+echo
+until [[ "$GOOGLE_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include Google IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n GOOGLE_INCLUDE || exit 1
+done
+echo
+until [[ "$AKAMAI_INCLUDE" =~ ^[yn]$ ]]; do
+	read -rp $'Include Akamai IPv4/IPv6 IPs in \001\e[1;32m\002AntiZapret VPN\001\e[0m\002? [y/n]: ' -e -i n AKAMAI_INCLUDE || exit 1
+done
+echo
 echo 'Installation, please wait...'
 
 handle_error() {
@@ -3473,7 +3545,6 @@ CLIENT_ISOLATION=$CLIENT_ISOLATION
 OPENVPN_HOST=$OPENVPN_HOST
 WIREGUARD_HOST=$WIREGUARD_HOST
 ROUTE_ALL=$ROUTE_ALL
-DISCORD_INCLUDE=$DISCORD_INCLUDE
 CLOUDFLARE_INCLUDE=$CLOUDFLARE_INCLUDE
 TELEGRAM_INCLUDE=$TELEGRAM_INCLUDE
 WHATSAPP_INCLUDE=$WHATSAPP_INCLUDE
@@ -3503,7 +3574,13 @@ mkdir -p /var/cache/knot-resolver2
 
 # Выставляем разрешения
 find /tmp/antizapret \
-	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
+	\( -path /tmp/antizapret/setup/opt/AdminAntizapret/.env -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/instance -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/data -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/logs -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/backups -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/ips/runtime_backups -o \
+	   -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/private -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/inline -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private -o \
@@ -3520,7 +3597,13 @@ find /tmp/antizapret \
 	   -path /tmp/antizapret/setup/etc/wireguard \) -prune -o \
 	-type f -exec chmod 644 {} +
 find /tmp/antizapret \
-	\( -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
+	\( -path /tmp/antizapret/setup/opt/AdminAntizapret/.env -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/instance -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/data -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/logs -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/backups -o \
+	   -path /tmp/antizapret/setup/opt/AdminAntizapret/ips/runtime_backups -o \
+	   -path '/tmp/antizapret/setup/etc/openvpn/easyrsa3/*.creds' -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/private -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/inline -o \
 	   -path /tmp/antizapret/setup/etc/openvpn/easyrsa3/renewed/private -o \

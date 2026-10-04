@@ -1,10 +1,23 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 SECONDS=0
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 SYSTEMD_DIR="${ANTIZAPRET_SYSTEMD_DIR:-/etc/systemd/system}"
 cd "$ROOT_DIR"
+
+# Один lock охватывает загрузку и применение, а наследуемый fd переживает
+# дочерний update.sh и повторный exec после самообновления doall.sh.
+mkdir -p "$ROOT_DIR/state"
+UPDATE_LOCK_PATH="$ROOT_DIR/state/update.lock"
+if [[ ! "${ANTIZAPRET_UPDATE_LOCK_FD:-}" =~ ^[0-9]+$ ]] || \
+	[[ ! "$UPDATE_LOCK_PATH" -ef "/proc/$$/fd/${ANTIZAPRET_UPDATE_LOCK_FD:-}" ]] || \
+	! flock -n "$ANTIZAPRET_UPDATE_LOCK_FD"; then
+	exec {ANTIZAPRET_UPDATE_LOCK_FD}> "$UPDATE_LOCK_PATH"
+	flock -x "$ANTIZAPRET_UPDATE_LOCK_FD"
+fi
+export ANTIZAPRET_UPDATE_LOCK_FD
+
 source setup
 export DISABLE_IPV6 VPN_IPV6_PREFIX BGP_ENABLE ALTERNATIVE_FAKE_IPV6
 
@@ -47,8 +60,8 @@ resolve_firewall6_revision() {
 		return 1
 	fi
 	FIREWALL6_TEMPORARIES+=("$revision_file")
-	if ! curl -fL --connect-timeout 30 "$FIREWALL6_REVISION_API" -o "$revision_file" &&
-		! curl -fL --connect-timeout 30 "$FIREWALL6_PROXY$FIREWALL6_REVISION_API" -o "$revision_file"; then
+	if ! curl -fL --connect-timeout 30 --max-time "${ANTIZAPRET_DOWNLOAD_TIMEOUT:-300}" "$FIREWALL6_REVISION_API" -o "$revision_file" &&
+		! curl -fL --connect-timeout 30 --max-time "${ANTIZAPRET_DOWNLOAD_TIMEOUT:-300}" "$FIREWALL6_PROXY$FIREWALL6_REVISION_API" -o "$revision_file"; then
 		return 1
 	fi
 	if ! FIREWALL6_REVISION="$(python3 - "$revision_file" <<'PY'
@@ -73,10 +86,10 @@ PY
 download_firewall6_file() {
 	local relative=$1 destination=$2
 	local link="$FIREWALL6_RAW_BASE/$FIREWALL6_REVISION/$relative"
-	if curl -fL --connect-timeout 30 "$link" -o "$destination"; then
+	if curl -fL --connect-timeout 30 --max-time "${ANTIZAPRET_DOWNLOAD_TIMEOUT:-300}" "$link" -o "$destination"; then
 		return 0
 	fi
-	if curl -fL --connect-timeout 30 "$FIREWALL6_PROXY$link" -o "$destination"; then
+	if curl -fL --connect-timeout 30 --max-time "${ANTIZAPRET_DOWNLOAD_TIMEOUT:-300}" "$FIREWALL6_PROXY$link" -o "$destination"; then
 		return 0
 	fi
 	rm -f "$destination"
@@ -180,6 +193,12 @@ sync_firewall6_locked() {
 			"$SYSTEMD_DIR/antizapret-bgp.service"
 		)
 		modes+=(755 755 644)
+	fi
+
+	if [[ "${ANTIZAPRET_SKIP_SCRIPT_UPDATE:-n}" == 'y' ]]; then
+		keep_installed_firewall6_snapshot \
+			'Keeping the pinned local IPv6/BGP snapshot; script updates are disabled'
+		return
 	fi
 
 	if ! resolve_firewall6_revision; then

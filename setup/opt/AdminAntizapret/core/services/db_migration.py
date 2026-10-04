@@ -1,4 +1,3 @@
-import json
 import logging
 
 from sqlalchemy import inspect as sa_inspect
@@ -12,11 +11,46 @@ class DatabaseMigrationService:
         self.app = app
         self.db = db
 
+    def _remove_telegram_schema(self):
+        """Remove retired integration data without rebuilding the user table."""
+        with self.db.engine.connect() as conn:
+            # Explicit BEGIN also makes SQLite DDL transactional on Python's
+            # legacy sqlite3 driver. An unexpected schema must roll back intact.
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                inspector = sa_inspect(conn)
+                retired_columns = {"telegram_id", "tg_notify", "tg_notify_events"}
+                existing_columns = {
+                    column["name"] for column in inspector.get_columns("user")
+                }
+                columns_to_remove = retired_columns & existing_columns
+                if columns_to_remove:
+                    version = conn.exec_driver_sql("SELECT sqlite_version()").scalar_one()
+                    if tuple(int(part) for part in version.split(".")) < (3, 35, 0):
+                        raise RuntimeError(
+                            "Removing Telegram fields requires SQLite 3.35 or newer"
+                        )
+                    quote = self.db.engine.dialect.identifier_preparer.quote
+                    for index in inspector.get_indexes("user"):
+                        index_columns = set(index.get("column_names") or [])
+                        if index_columns and index_columns <= retired_columns:
+                            conn.exec_driver_sql(f"DROP INDEX {quote(index['name'])}")
+                    for column_name in sorted(columns_to_remove):
+                        conn.exec_driver_sql(
+                            f'ALTER TABLE "user" DROP COLUMN {quote(column_name)}'
+                        )
+                conn.exec_driver_sql('DROP TABLE IF EXISTS "telegram_mini_audit_log"')
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
     def run_db_migrations(self, *, strict=False):
         """Apply incremental DB schema migrations."""
         with self.app.app_context():
             self.db.create_all()
             try:
+                self._remove_telegram_schema()
                 insp = sa_inspect(self.db.engine)
                 cols = [c["name"] for c in insp.get_columns("user")]
                 if "role" not in cols:
@@ -28,49 +62,7 @@ class DatabaseMigrationService:
                         )
                         conn.commit()
 
-                if "telegram_id" not in cols:
-                    with self.db.engine.connect() as conn:
-                        conn.execute(
-                            text(
-                                "ALTER TABLE \"user\" ADD COLUMN telegram_id VARCHAR(32)"
-                            )
-                        )
-                        conn.commit()
-
-                if "tg_notify" not in cols:
-                    with self.db.engine.connect() as conn:
-                        conn.execute(
-                            text(
-                                "ALTER TABLE \"user\" ADD COLUMN tg_notify BOOLEAN NOT NULL DEFAULT 0"
-                            )
-                        )
-                        conn.commit()
-
-                if "tg_notify_events" not in cols:
-                    with self.db.engine.connect() as conn:
-                        conn.execute(
-                            text('ALTER TABLE "user" ADD COLUMN tg_notify_events TEXT')
-                        )
-                        conn.commit()
-                    # Migrate old tg_notify=True users: enable all events for them
-                    _all_events_json = json.dumps({
-                        "login_success": True, "login_failed": True, "tg_unlinked": True,
-                        "config_create": True, "config_delete": True, "user_create": True,
-                        "user_delete": True, "client_ban": True, "settings_change": True,
-                    })
-                    with self.db.engine.connect() as conn:
-                        conn.execute(
-                            text('UPDATE "user" SET tg_notify_events = :ev WHERE tg_notify = 1'),
-                            {"ev": _all_events_json},
-                        )
-                        conn.commit()
-
                 with self.db.engine.connect() as conn:
-                    conn.execute(
-                        text(
-                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_telegram_id ON \"user\" (telegram_id)"
-                        )
-                    )
                     conn.execute(
                         text(
                             "CREATE INDEX IF NOT EXISTS ix_user_role ON \"user\" (role)"

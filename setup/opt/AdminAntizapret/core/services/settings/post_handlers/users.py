@@ -1,13 +1,8 @@
 # Выполняет административные действия с пользователями через один валидируемый POST.
-import json as _json
-
 from core.services.feature_toggles import app_module_disabled_message, is_app_module_enabled
-from core.services.settings.telegram_normalize import normalize_telegram_id
 
 _USER_SETTINGS_FORM_KEYS = (
     "username",
-    "change_tg_notify_username",
-    "change_telegram_username",
     "delete_username",
     "change_role_username",
     "change_password_username",
@@ -40,20 +35,12 @@ def handle_users_settings(
             role = form.get("role", "admin")
             if role not in ("admin", "viewer"):
                 role = "admin"
-            telegram_id_raw = form.get("telegram_id", "")
-            normalized_telegram_id, tg_error = normalize_telegram_id(telegram_id_raw)
-
-            if tg_error:
-                flash(tg_error, "error")
-            elif user_model.query.filter_by(username=username).first():
+            if user_model.query.filter_by(username=username).first():
                 flash(f"Пользователь '{username}' уже существует!", "error")
-            elif normalized_telegram_id and user_model.query.filter_by(telegram_id=normalized_telegram_id).first():
-                flash(f"Telegram ID {normalized_telegram_id} уже привязан к другому пользователю!", "error")
             else:
                 user = user_model(
                     username=username,
                     role=role,
-                    telegram_id=normalized_telegram_id or None,
                 )
                 user.set_password(password)
                 db.session.add(user)
@@ -63,74 +50,7 @@ def handle_users_settings(
                     "settings_user_create",
                     target_type="user",
                     target_name=username,
-                    details=f"роль={role}" + (f" TG={normalized_telegram_id}" if normalized_telegram_id else ""),
-                )
-
-    change_tg_notify_username = form.get("change_tg_notify_username")
-    if change_tg_notify_username:
-        notify_user = user_model.query.filter_by(username=change_tg_notify_username).first()
-        if notify_user:
-            _ev_keys = [
-                "login_success", "login_failed", "tg_unlinked",
-                "config_create", "config_delete",
-                "user_create", "user_delete",
-                "client_ban", "traffic_limit", "settings_change",
-                "high_cpu", "high_ram",
-            ]
-            events = {k: (form.get(f"tg_e_{k}") == "1") for k in _ev_keys}
-            notify_user.tg_notify_events = _json.dumps(events)
-            db.session.commit()
-            flash(f"Настройки уведомлений для '{change_tg_notify_username}' сохранены", "success")
-            log_user_action_event(
-                "settings_user_tg_notify_update",
-                target_type="user",
-                target_name=change_tg_notify_username,
-                details=_json.dumps({k: v for k, v in events.items() if v}),
-            )
-        else:
-            flash(f"Пользователь '{change_tg_notify_username}' не найден!", "error")
-
-    change_telegram_username = form.get("change_telegram_username")
-    if change_telegram_username:
-        tg_user = user_model.query.filter_by(username=change_telegram_username).first()
-        if not tg_user:
-            flash(f"Пользователь '{change_telegram_username}' не найден!", "error")
-        else:
-            new_telegram_id_raw = form.get("new_telegram_id", "")
-            normalized_telegram_id, tg_error = normalize_telegram_id(new_telegram_id_raw)
-            if tg_error:
-                flash(tg_error, "error")
-            else:
-                if normalized_telegram_id:
-                    owner = user_model.query.filter(
-                        user_model.telegram_id == normalized_telegram_id,
-                        user_model.username != change_telegram_username,
-                    ).first()
-                    if owner:
-                        flash(
-                            f"Telegram ID {normalized_telegram_id} уже привязан к пользователю '{owner.username}'",
-                            "error",
-                        )
-                        return redirect_url
-
-                old_telegram_id = tg_user.telegram_id or "—"
-                tg_user.telegram_id = normalized_telegram_id or None
-                db.session.commit()
-                if normalized_telegram_id:
-                    flash(
-                        f"Telegram ID пользователя '{change_telegram_username}' обновлён",
-                        "success",
-                    )
-                else:
-                    flash(
-                        f"Telegram ID пользователя '{change_telegram_username}' очищен",
-                        "success",
-                    )
-                log_user_action_event(
-                    "settings_user_telegram_update",
-                    target_type="user",
-                    target_name=change_telegram_username,
-                    details=f"{old_telegram_id} → {normalized_telegram_id or '—'}",
+                    details=f"роль={role}",
                 )
 
     delete_username = form.get("delete_username")

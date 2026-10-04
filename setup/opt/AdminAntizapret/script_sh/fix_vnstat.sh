@@ -96,7 +96,8 @@ if [ -f "$INSTALL_DIR/.env" ] && grep -q "^VNSTAT_IFACE=" "$INSTALL_DIR/.env"; t
 		case $answer in
 		[Yy]*)
 			# Обновляем значение VNSTAT_IFACE
-			sed -i "s/^VNSTAT_IFACE=.*/VNSTAT_IFACE=$vnstat_iface/" "$INSTALL_DIR/.env"
+			printf '%s' "$vnstat_iface" | python3 "$INSTALL_DIR/utils/env_file.py" "$INSTALL_DIR/.env" --set VNSTAT_IFACE
+			check_error $? "Не удалось сохранить VNSTAT_IFACE"
 			echo "${GREEN}Обновлено VNSTAT_IFACE=$vnstat_iface в $INSTALL_DIR/.env${NC}"
 			break
 			;;
@@ -112,7 +113,8 @@ if [ -f "$INSTALL_DIR/.env" ] && grep -q "^VNSTAT_IFACE=" "$INSTALL_DIR/.env"; t
 	done
 else
 	# Если переменной нет, добавляем её
-	echo "VNSTAT_IFACE=$vnstat_iface" >>"$INSTALL_DIR/.env"
+	printf '%s' "$vnstat_iface" | python3 "$INSTALL_DIR/utils/env_file.py" "$INSTALL_DIR/.env" --set VNSTAT_IFACE
+	check_error $? "Не удалось сохранить VNSTAT_IFACE"
 	echo "${GREEN}Установлено VNSTAT_IFACE=$vnstat_iface в $INSTALL_DIR/.env${NC}"
 fi
 

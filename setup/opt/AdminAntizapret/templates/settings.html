@@ -34,10 +34,6 @@
   {% if not tab_state.first %}{% set tab_state.first = 'security' %}{% endif %}
   {% include "partials/settings/_tab_security.html" %}
 {% endif %}
-{% if feature_modules.get('telegram', true) %}
-  {% if not tab_state.first %}{% set tab_state.first = 'telegram-auth' %}{% endif %}
-  {% include "partials/settings/_tab_telegram_auth.html" %}
-{% endif %}
 {% if feature_modules.get('action_logs', true) %}
   {% if not tab_state.first %}{% set tab_state.first = 'action-logs' %}{% endif %}
   {% include "partials/settings/_tab_action_logs.html" %}

@@ -439,21 +439,26 @@ def publish(config: Mapping[str, str], *, prepare_only: bool) -> str:
             # Сначала переключаем атомарную ссылку и основной конфиг, затем
             # проверяем уже опубликованное состояние. При ошибке возвращаем оба.
             target = str(generation.relative_to(STATE_DIR))
-            replace_symlink(current, target)
-            atomic_write(CONFIG_PATH, stable_text)
+            config_written = False
             try:
+                replace_symlink(current, target)
+                atomic_write(CONFIG_PATH, stable_text)
+                config_written = True
                 validate_config(CONFIG_PATH)
                 if not prepare_only and socket_is_live():
                     reload_bird()
-            except BGPError:
+            except (BGPError, OSError):
                 if old_target is not None:
                     replace_symlink(current, old_target)
                 else:
                     current.unlink(missing_ok=True)
-                if old_config is not None:
-                    atomic_write(CONFIG_PATH, old_config.decode("utf-8"))
-                else:
-                    CONFIG_PATH.unlink(missing_ok=True)
+                # Если запись не дошла до rename, старый конфиг ещё на месте.
+                # Не пытаемся переписать его при той же ошибке диска или прав.
+                if config_written:
+                    if old_config is not None:
+                        atomic_write(CONFIG_PATH, old_config.decode("utf-8"))
+                    else:
+                        CONFIG_PATH.unlink(missing_ok=True)
                 if not prepare_only and old_target is not None and socket_is_live():
                     try:
                         reload_bird()

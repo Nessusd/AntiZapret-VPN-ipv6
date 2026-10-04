@@ -8,9 +8,6 @@
           Последние 300 операций сгруппированы по дням и сессиям. Доступны фильтры, сортировка и экспорт CSV.
         </p>
       </div>
-      <a class="button secondary-button" href="{{ url_for('settings') }}#telegram-auth">
-        Открыть Telegram-журнал
-      </a>
     </div>
 
     {% if user_action_day_groups %}
@@ -27,7 +24,6 @@
       <div class="audit-log-filters__sources" id="auditSourcePills">
         <button class="audit-pill audit-pill--active" data-src="">Все</button>
         <button class="audit-pill" data-src="web"><span class="log-source-badge log-source-badge-web">Панель</span></button>
-        <button class="audit-pill" data-src="miniapp"><span class="log-source-badge log-source-badge-miniapp">Mini App</span></button>
         <button class="audit-pill" data-src="qr"><span class="log-source-badge log-source-badge-qr">QR</span></button>
         <button class="audit-pill" data-src="api"><span class="log-source-badge log-source-badge-api">API</span></button>
         <button class="audit-pill" data-src="public"><span class="log-source-badge log-source-badge-public">Public</span></button>
@@ -147,7 +143,7 @@
 
           {% for row in session.rows %}
           <tr
-            class="log-source-row log-source-{{ row.source_kind }} severity-{{ row.severity }}{% if row.is_miniapp %} miniapp-event{% endif %}{% if row.is_security_alert %} audit-security-alert{% endif %} audit-action-row"
+            class="log-source-row log-source-{{ row.source_kind }} severity-{{ row.severity }}{% if row.is_security_alert %} audit-security-alert{% endif %} audit-action-row"
             data-src="{{ row.source_kind }}"
             data-user="{{ row.actor_display }}"
             data-status="{{ row.status }}"

@@ -1,9 +1,14 @@
 # Отдаёт параметры AntiZapret из его setup и меняет их через штатный механизм применения.
-from flask import current_app, jsonify, request, session
+import shlex
+
+from flask import current_app, jsonify, request
 
 from config.antizapret_params import ANTIZAPRET_PARAMS
 from core.services.antizapret_settings import ANTIZAPRET_SETUP_FILE, read_antizapret_settings
-from tg_mini.session import has_telegram_mini_session
+
+from utils.endpoint_host import normalize_endpoint_host
+from utils.file_io import atomic_write_text, file_lock
+from utils.shell_config import parse_shell_assignment
 
 FILE_PATH = ANTIZAPRET_SETUP_FILE
 
@@ -34,9 +39,6 @@ def register_settings_antizapret_routes(app, *, auth_manager):
             if not isinstance(new_settings, dict):
                 return jsonify({"success": False, "message": "Ожидается JSON-объект"}), 400
 
-            with open(FILE_PATH, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-
             desired = {}
             for p in ANTIZAPRET_PARAMS:
                 if p.get("managed_by_installer"):
@@ -44,41 +46,46 @@ def register_settings_antizapret_routes(app, *, auth_manager):
                 if (k := p["key"]) in new_settings:
                     v = new_settings[k]
                     env = p["env"]
-                    desired[env] = normalize_flag(v) if p["type"] == "flag" else str(v).strip()
+                    if p["type"] == "flag":
+                        desired[env] = normalize_flag(v)
+                    else:
+                        try:
+                            desired[env] = normalize_endpoint_host(v)
+                        except ValueError as exc:
+                            return jsonify({"success": False, "message": str(exc)}), 400
 
             if not desired:
                 return jsonify({"success": True, "message": "Нечего обновлять", "changes": 0})
 
-            new_lines = []
-            found = set()
-            changes = 0
+            with file_lock(FILE_PATH) as path:
+                with path.open("r", encoding="utf-8") as source:
+                    lines = source.readlines()
 
-            for line in lines:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    new_lines.append(line)
-                    continue
-
-                key_part = stripped.split("=", 1)[0].strip()
-                if key_part in desired:
-                    val = desired[key_part]
-                    comment = " " + stripped.split("#", 1)[1].strip() if "#" in stripped else ""
-                    new_lines.append(f"{key_part}={val}{comment}\n")
-                    found.add(key_part)
-                    changes += 1
-                else:
-                    new_lines.append(line)
-
-            for env, val in desired.items():
-                if env not in found:
-                    new_lines.append(f"{env}={val}\n")
+                new_lines = []
+                found = set()
+                changes = 0
+                for line in lines:
+                    assignment = parse_shell_assignment(line)
+                    if assignment is None or assignment.key not in desired:
+                        new_lines.append(line)
+                        continue
+                    value = desired[assignment.key]
+                    comment = " " + assignment.comment if assignment.comment else ""
+                    new_lines.append(
+                        f"{assignment.prefix}{assignment.key}={shlex.quote(value)}{comment}\n"
+                    )
+                    found.add(assignment.key)
                     changes += 1
 
-            has_mini_session = has_telegram_mini_session(session)
+                for env, value in desired.items():
+                    if env not in found:
+                        if new_lines and not new_lines[-1].endswith("\n"):
+                            new_lines[-1] += "\n"
+                        new_lines.append(f"{env}={shlex.quote(value)}\n")
+                        changes += 1
 
-            if changes > 0:
-                with open(FILE_PATH, "w", encoding="utf-8") as f:
-                    f.writelines(new_lines)
+                if changes > 0:
+                    atomic_write_text(path, "".join(new_lines))
 
             if changes > 0:
                 user_action_logger = current_app.config.get("USER_ACTION_AUDIT_LOGGER")
@@ -88,25 +95,11 @@ def register_settings_antizapret_routes(app, *, auth_manager):
                     if len(changed_keys) > 8:
                         sample += ",..."
                     details_text = f"changes={changes} keys={sample}"
-                    if has_mini_session:
-                        details_text += " via=tg-mini"
                     user_action_logger(
                         "settings_antizapret_update",
                         target_type="antizapret",
                         target_name="setup",
                         details=details_text,
-                    )
-
-            if changes > 0 and has_mini_session:
-                logger_callback = current_app.config.get("TELEGRAM_AUDIT_LOGGER")
-                if callable(logger_callback):
-                    changed_keys = sorted(desired.keys())
-                    sample = ",".join(changed_keys[:8])
-                    if len(changed_keys) > 8:
-                        sample += ",..."
-                    logger_callback(
-                        "mini_antizapret_settings_update",
-                        details=f"changes={changes} keys={sample}",
                     )
 
             return jsonify({

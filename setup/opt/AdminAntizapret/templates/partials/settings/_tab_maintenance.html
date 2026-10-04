@@ -194,18 +194,8 @@
           </div>
         </div>
 
-        <h5 class="maintenance-backup-subtitle">Telegram и AntiZapret</h5>
+        <h5 class="maintenance-backup-subtitle">Бэкап AntiZapret</h5>
         <div class="maintenance-form-grid maintenance-form-grid--2">
-          <div class="form-group">
-            <label for="app_backup_tg_enabled">Отправка в Telegram</label>
-            <select id="app_backup_tg_enabled" name="app_backup_tg_enabled" class="form-control">
-              <option value="true" {% if app_backup_tg_enabled %}selected{% endif %}>Да (только авто-бэкапы)</option>
-              <option value="false" {% if not app_backup_tg_enabled %}selected{% endif %}>Нет</option>
-            </select>
-            <small class="help-text">При включении администраторам отправляются два архива: панель и AntiZapret
-              (VPN).</small>
-          </div>
-
           <div class="form-group">
             <label for="app_backup_az_enabled">Бэкап AntiZapret (client.sh 8)</label>
             <select id="app_backup_az_enabled" name="app_backup_az_enabled" class="form-control">
@@ -245,36 +235,6 @@
           </div>
         </div>
 
-        <div class="form-group maintenance-recipient-field">
-          <div class="maintenance-recipient-field__head">
-            <label class="maintenance-recipient-field__label">Получатели в Telegram</label>
-            <span class="maintenance-recipient-field__count">
-              {{ app_backup_tg_admin_ids|length }} из {{ app_backup_admin_candidates|length }}
-            </span>
-          </div>
-          {% if app_backup_admin_candidates %}
-          <p class="maintenance-recipient-hint">Нажмите на имя — включить или исключить из рассылки. Сохраните
-            настройки.</p>
-          <div class="maintenance-recipient-chips" role="group" aria-label="Получатели бэкапа в Telegram">
-            {% for admin in app_backup_admin_candidates %}
-            <label
-              class="maintenance-recipient-chip{% if (admin.id|string) in app_backup_tg_admin_ids %} is-on{% endif %}"
-              title="{{ admin.username }} · {{ admin.telegram_id }}">
-              <input type="checkbox" class="maintenance-recipient-chip__input" name="app_backup_tg_admin_ids"
-                value="{{ admin.id }}" {% if (admin.id|string) in app_backup_tg_admin_ids %}checked{% endif %} />
-              <span class="maintenance-recipient-chip__name">{{ admin.username }}</span>
-              <span class="maintenance-recipient-chip__action" aria-hidden="true"></span>
-            </label>
-            {% endfor %}
-          </div>
-          {% else %}
-          <div class="maintenance-callout maintenance-callout--compact">
-            <p>Нет админов с Telegram ID.</p>
-          </div>
-          {% endif %}
-          <small class="help-text">Только для авто-бэкапов при включённой отправке в Telegram.</small>
-        </div>
-
         <div class="maintenance-btn-row">
           <button type="submit" class="button save-button">Сохранить настройки бэкапов</button>
         </div>
@@ -287,7 +247,7 @@
         <article class="maintenance-backup-action-card">
           <h5 class="maintenance-backup-action-card__title">Создать на сервере</h5>
           <p class="maintenance-backup-action-card__lead">
-            Архив в <code>/var/backups/antizapret</code> без отправки в Telegram.
+            Архив в <code>/var/backups/antizapret</code>.
           </p>
           <form method="POST"
             class="settings-form maintenance-form maintenance-backup-action-card__form js-backup-create-form">
@@ -296,23 +256,6 @@
             <button type="submit" class="button save-button maintenance-backup-action-card__btn">Создать бэкап
               сейчас</button>
           </form>
-        </article>
-        <article class="maintenance-backup-action-card maintenance-backup-action-card--tg">
-          <h5 class="maintenance-backup-action-card__title">Отправить в Telegram</h5>
-          <p class="maintenance-backup-action-card__lead">
-            Создаёт архивы панели и AntiZapret (если включён) и отправляет их сохранённым получателям.
-            Не требует авто-бэкапа по расписанию.
-          </p>
-          <button type="button"
-            class="button save-button maintenance-backup-action-card__btn maintenance-backup-btn--tg js-backup-send-tg"
-            {% if not telegram_auth_bot_token_set %}disabled{% endif %}
-            title="{% if not telegram_auth_bot_token_set %}Сначала укажите токен бота в «Telegram авторизация»{% else %}Создать бэкапы и отправить в Telegram выбранным админам{% endif %}">
-            <span class="maintenance-backup-btn__badge" aria-hidden="true">TG</span>
-            Создать бэкап и отправить в TG
-          </button>
-          {% if not telegram_auth_bot_token_set %}
-          <p class="maintenance-backup-action-card__note">Укажите токен бота в разделе «Telegram авторизация».</p>
-          {% endif %}
         </article>
       </div>
     </div>

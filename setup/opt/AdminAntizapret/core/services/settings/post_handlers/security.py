@@ -1,7 +1,7 @@
 # Управляет whitelist панели и банами сканеров с обязательной записью в аудит.
 from core.services.feature_toggles import app_module_disabled_message, is_app_module_enabled
 from core.services.panel_publish_info import is_whitelist_port_firewall_applicable
-from core.services.settings.telegram_normalize import normalize_ip_entry
+from core.services.settings.input_normalize import normalize_ip_entry
 
 
 def handle_security_settings(form, *, flash, ip_restriction, log_user_action_event, get_env_value=None):

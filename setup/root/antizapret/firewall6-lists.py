@@ -151,13 +151,19 @@ def write_openvpn_routes(
     managed = False
     for line in original.splitlines():
         if line == OPENVPN_BEGIN:
+            if managed:
+                raise RuntimeError(f"nested managed IPv6 block in {destination}")
             managed = True
             continue
         if line == OPENVPN_END:
+            if not managed:
+                raise RuntimeError(f"unexpected managed IPv6 block end in {destination}")
             managed = False
             continue
         if not managed:
             retained.append(line)
+    if managed:
+        raise RuntimeError(f"unterminated managed IPv6 block in {destination}")
     if enabled:
         retained.extend([OPENVPN_BEGIN])
         retained.extend(

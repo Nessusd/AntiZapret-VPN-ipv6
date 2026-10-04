@@ -1,3 +1,22 @@
+{% macro provider_toggle(param) -%}
+            <div class="config-item az-item">
+              <label class="toggle-wrapper">
+                <span class="toggle-label">
+                  <span class="config-item-title">{{ param.title }} <span class="tag-az">AZ</span></span>
+                </span>
+                <div class="toggle-switch">
+                  <input type="checkbox" id="{{ param.html_id }}" class="toggle-input"
+                    {% if antizapret_settings[param.key] == 'y' %}checked{% endif %} />
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+              <div class="config-item-tooltip">
+                <span class="config-param">({{ param.env }})</span>
+                {{ param.description }}
+              </div>
+            </div>
+{%- endmacro %}
+
     <div id="antizapret-config" class="content-tab active">
       <h2>Фильтры и сервисы</h2>
       <p class="config-description">Включите нужные сервисы и защитные функции. Изменения вступают в силу после нажатия
@@ -50,8 +69,9 @@
           <h3>Сервисы и приложения</h3>
           <span class="section-micro-status" data-section-status="routing">актуально</span>
         </div>
-        <p class="config-description">Трафик отмеченных сервисов будет проходить через Antizapret VPN, даже если
-          пользователь подключён к ветви Antizapret (GoodVPN):</p>
+        <p class="config-description">Переключатели IP-списков управляют обоими стеками: IPv4 и IPv6.
+          Если IPv6 отключён в AntiZapret, используется только IPv4. Изменения применяются штатным обновлением списков.
+          Ручные записи в <code>config/include-ips.txt</code> и доменные правила от этих переключателей не зависят.</p>
 
         <div class="config-grid">
           <!-- Первый столбец -->
@@ -75,104 +95,21 @@
               </div>
             </div>
 
-            <!-- DISCORD_INCLUDE -->
-            <div class="config-item az-item">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">Discord <span class="tag-az">AZ</span></span>
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="discord-toggle" class="toggle-input" {% if
-                    antizapret_settings.discord_include=='y' %}checked{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <div class="config-item-tooltip">
-                <span class="config-param">(DISCORD_INCLUDE)</span> Перенаправляет
-                трафик Discord через antizapret, включая голосовые каналы и обмен
-                сообщениями
-              </div>
-            </div>
-
-            <!-- CLOUDFLARE_INCLUDE -->
-            <div class="config-item az-item">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">Cloudflare <span class="tag-az">AZ</span>
-                  </span>
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="cloudflare-toggle" class="toggle-input" {% if
-                    antizapret_settings.cloudflare_include=='y' %}checked{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <div class="config-item-tooltip">
-                <span class="config-param">(CLOUDFLARE_INCLUDE)</span>
-                Перенаправляет трафик Cloudflare через antizapret, включая сайты и
-                сервисы, использующие Cloudflare для защиты от DDoS-атак
-              </div>
-            </div>
+            {{ provider_toggle(antizapret_params.cloudflare_include) }}
+            {{ provider_toggle(antizapret_params.amazon_include) }}
+            {{ provider_toggle(antizapret_params.google_include) }}
+            {{ provider_toggle(antizapret_params.akamai_include) }}
           </div>
 
           <!-- Второй столбец -->
           <div class="config-column">
 
-            <!-- TELEGRAM_INCLUDE -->
-            <div class="config-item az-item">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">Telegram <span class="tag-az">AZ</span></span>
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="telegram-toggle" class="toggle-input" {% if
-                    antizapret_settings.telegram_include=='y' %}checked{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <div class="config-item-tooltip">
-                <span class="config-param">(TELEGRAM_INCLUDE)</span>
-                Перенаправляет трафик Telegram через Antizapret, включая обмен
-                сообщениями, каналы и группы
-              </div>
-            </div>
-            <!-- WhatsApp_INCLUDE -->
-            <div class="config-item az-item">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">WhatsApp <span class="tag-az">AZ</span></span>
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="whatsapp-toggle" class="toggle-input" {% if
-                    antizapret_settings.whatsapp_include=='y' %}checked{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <div class="config-item-tooltip">
-                <span class="config-param">(WHATSAPP_INCLUDE)</span>
-                Перенаправляет трафик WhatsApp через Antizapret, включая обмен
-                сообщениями, звонки и медиафайлы.
-              </div>
-            </div>
-            <!-- ROBLOX_INCLUDE -->
-            <div class="config-item az-item">
-              <label class="toggle-wrapper">
-                <span class="toggle-label">
-                  <span class="config-item-title">Roblox <span class="tag-az">AZ</span></span>
-                </span>
-                <div class="toggle-switch">
-                  <input type="checkbox" id="roblox-toggle" class="toggle-input" {% if
-                    antizapret_settings.roblox_include=='y' %}checked{% endif %} />
-                  <span class="toggle-slider"></span>
-                </div>
-              </label>
-              <div class="config-item-tooltip">
-                <span class="config-param">(ROBLOX_INCLUDE)</span> Перенаправляет
-                трафик Roblox через Antizapret, включая игровой контент, платежи и
-                социальные функции.
-              </div>
-            </div>
-
+            {{ provider_toggle(antizapret_params.telegram_include) }}
+            {{ provider_toggle(antizapret_params.whatsapp_include) }}
+            {{ provider_toggle(antizapret_params.roblox_include) }}
+            {{ provider_toggle(antizapret_params.hetzner_include) }}
+            {{ provider_toggle(antizapret_params.digitalocean_include) }}
+            {{ provider_toggle(antizapret_params.ovh_include) }}
           </div>
         </div>
 

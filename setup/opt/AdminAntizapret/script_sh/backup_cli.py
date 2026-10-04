@@ -14,7 +14,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from core.services.backup_manager import BackupManagerService  # noqa: E402
-from core.services.backup_telegram_job import env_value, load_env_map  # noqa: E402
+from core.services.backup_job import env_value, load_env_map  # noqa: E402
 
 
 @contextmanager

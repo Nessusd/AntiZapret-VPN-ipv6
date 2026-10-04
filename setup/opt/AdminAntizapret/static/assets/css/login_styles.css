@@ -407,36 +407,6 @@ img {
   cursor: wait;
 }
 
-.login__telegram {
-  margin-top: 0.55rem;
-}
-
-.login__divider {
-  display: flex;
-  align-items: center;
-  gap: 0.58rem;
-  color: var(--ink-70);
-  font-size: 0.81rem;
-}
-
-.login__divider::before,
-.login__divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(
-    to right,
-    transparent,
-    rgba(108, 149, 168, 0.5),
-    transparent
-  );
-}
-
-.login__telegram-widget {
-  margin-top: 0.62rem;
-  display: flex;
-  justify-content: center;
-}
 
 /* Floating label: raised state (focus, filled, autofill) */
 .login__label--raised,

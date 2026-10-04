@@ -21,11 +21,6 @@ import secrets
 from datetime import datetime, timezone, timedelta
 import shlex
 from threading import RLock
-from core.services.admin_notify import (
-    AdminNotifyService,
-    CLIENT_BLOCK_NOTIFY_EVENTS,
-    SETTINGS_CHANGE_NOTIFY,
-)
 from flask_wtf.csrf import CSRFProtect
 from dotenv import load_dotenv
 import time
@@ -62,7 +57,6 @@ from core.models import (
     OpenVpnAccessPolicy,
     QrDownloadAuditLog,
     QrDownloadToken,
-    TelegramMiniAuditLog,
     TrafficSessionState,
     User,
     UserActionLog,
@@ -329,71 +323,6 @@ def _log_qr_event(event_type, token_row=None, details=None):
     )
 
 
-def _log_telegram_audit_event(
-    event_type,
-    config_name=None,
-    details=None,
-    actor_username=None,
-    telegram_id=None,
-    mirror_user_action=True,
-):
-    """Writes Telegram/Mini App audit events without affecting primary workflow.
-    Also logs to UserActionLog with 'miniapp:' prefix to show in main action logs."""
-    try:
-        username = str(actor_username or session.get("username") or "").strip() or None
-        actor_user_id = None
-        resolved_telegram_id = str(telegram_id or session.get("telegram_mini_id") or "").strip()
-
-        if username:
-            actor = get_user_by_username(User, username)
-            if actor:
-                actor_user_id = actor.id
-                if not resolved_telegram_id:
-                    resolved_telegram_id = str(getattr(actor, "telegram_id", "") or "").strip()
-
-        remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
-        user_agent = (request.headers.get("User-Agent") or "")[:255]
-
-        db.session.add(
-            TelegramMiniAuditLog(
-                actor_user_id=actor_user_id,
-                actor_username=username,
-                telegram_id=(resolved_telegram_id or None),
-                event_type=str(event_type or "unknown")[:64],
-                config_name=(str(config_name or "").strip() or None),
-                details=(str(details or "")[:255] or None),
-                remote_addr=(remote_addr or None),
-                user_agent=(user_agent or None),
-            )
-        )
-        db.session.commit()
-
-        if mirror_user_action:
-            # Also log to UserActionLog with miniapp tag.
-            try:
-                db.session.add(
-                    UserActionLog(
-                        actor_user_id=actor_user_id,
-                        actor_username=username,
-                        event_type=f"miniapp:{str(event_type or 'unknown')[:59]}",  # Prefix with 'miniapp:' (max 64 chars)
-                        target_type="telegram_miniapp",
-                        target_name=(str(config_name or "").strip()[:255] or None),
-                        status="success",
-                        details=(str(details or "")[:255] or None),
-                        remote_addr=(remote_addr or None),
-                        user_agent=(user_agent or None),
-                    )
-                )
-                db.session.commit()
-            except SQLAlchemyError as e2:
-                db.session.rollback()
-                app.logger.warning("Не удалось записать событие Telegram audit в UserActionLog: %s", e2)
-    except SQLAlchemyError as e:
-        db.session.rollback()
-        app.logger.warning("Не удалось записать событие Telegram audit: %s", e)
-
-
-
 def _log_user_action_event(
     event_type,
     *,
@@ -436,43 +365,6 @@ def _log_user_action_event(
         app.logger.warning("Не удалось записать событие UserAction audit: %s", e)
         return
 
-    # Fire Telegram notification for mapped events
-    if status in ("error", "warning"):
-        return
-    try:
-        _notify_type = None
-        _notify_target = target_name
-        _settings_subject = None
-        if event_type in ("config_delete", "config_create", "config_recreate"):
-            _notify_type = event_type
-        elif event_type == "settings_user_create":
-            _notify_type = "user_create"
-        elif event_type == "settings_user_delete":
-            _notify_type = "user_delete"
-        elif event_type in CLIENT_BLOCK_NOTIFY_EVENTS:
-            _notify_type = "client_ban"
-        elif event_type in SETTINGS_CHANGE_NOTIFY:
-            _notify_type = "settings_change"
-            _settings_subject = target_name
-            _notify_target = event_type
-        if _notify_type:
-            from core.services.notify_time import get_client_timezone_from_request
-
-            _send_tg_admin_notification(
-                _notify_type,
-                actor_username=username,
-                target_name=_notify_target,
-                target_type=target_type,
-                remote_addr=remote_addr,
-                details=details,
-                subject_name=_settings_subject,
-                client_timezone=get_client_timezone_from_request(),
-            )
-    except Exception:
-        pass
-
-
-app.config["TELEGRAM_AUDIT_LOGGER"] = _log_telegram_audit_event
 app.config["USER_ACTION_AUDIT_LOGGER"] = _log_user_action_event
 
 
@@ -622,7 +514,6 @@ RUNTIME_BACKUP_CLEANUP_MARKER = runtime_settings["RUNTIME_BACKUP_CLEANUP_MARKER"
 RUNTIME_BACKUP_CLEANUP_CRON_EXPR = runtime_settings["RUNTIME_BACKUP_CLEANUP_CRON_EXPR"]
 RUNTIME_BACKUP_RETENTION_HOURS = runtime_settings["RUNTIME_BACKUP_RETENTION_HOURS"]
 RUNTIME_BACKUP_CLEANUP_ENABLED = runtime_settings["RUNTIME_BACKUP_CLEANUP_ENABLED"]
-MONITOR_ENABLED = runtime_settings["MONITOR_ENABLED"]
 ACTIVE_WEB_SESSION_TRACKING_ENABLED = runtime_settings["ACTIVE_WEB_SESSION_TRACKING_ENABLED"]
 RUNTIME_BACKUP_ROOT = os.path.join(APP_ROOT, "ips", "runtime_backups")
 _runtime_set("NIGHTLY_IDLE_RESTART_CRON_EXPR", runtime_settings["NIGHTLY_IDLE_RESTART_CRON_EXPR"])
@@ -631,8 +522,6 @@ _runtime_set("APP_BACKUP_ENABLED", runtime_settings["APP_BACKUP_ENABLED"])
 _runtime_set("APP_BACKUP_INTERVAL_DAYS", runtime_settings["APP_BACKUP_INTERVAL_DAYS"])
 _runtime_set("APP_BACKUP_TIME", runtime_settings["APP_BACKUP_TIME"])
 _runtime_set("APP_BACKUP_COMPONENTS", runtime_settings["APP_BACKUP_COMPONENTS"])
-_runtime_set("APP_BACKUP_TG_ENABLED", runtime_settings["APP_BACKUP_TG_ENABLED"])
-_runtime_set("APP_BACKUP_TG_ADMIN_IDS", runtime_settings["APP_BACKUP_TG_ADMIN_IDS"])
 _runtime_set("APP_BACKUP_AZ_ENABLED", runtime_settings["APP_BACKUP_AZ_ENABLED"])
 _runtime_set("APP_BACKUP_AZ_INSTALL_DIR", runtime_settings["APP_BACKUP_AZ_INSTALL_DIR"])
 _runtime_set("ACTIVE_WEB_SESSION_TTL_SECONDS", runtime_settings["ACTIVE_WEB_SESSION_TTL_SECONDS"])
@@ -642,7 +531,6 @@ _runtime_set(
 )
 _runtime_set("TRAFFIC_SYNC_ENABLED", runtime_settings["TRAFFIC_SYNC_ENABLED"])
 _runtime_set("WG_POLICY_SYNC_ENABLED", runtime_settings["WG_POLICY_SYNC_ENABLED"])
-_runtime_set("MONITOR_ENABLED", runtime_settings["MONITOR_ENABLED"])
 _runtime_set(
     "ACTIVE_WEB_SESSION_TRACKING_ENABLED",
     runtime_settings["ACTIVE_WEB_SESSION_TRACKING_ENABLED"],
@@ -677,8 +565,6 @@ def _get_backup_settings():
         "interval_days": int(_runtime_get("APP_BACKUP_INTERVAL_DAYS", 1)),
         "time_hhmm": str(_runtime_get("APP_BACKUP_TIME", "03:00") or "03:00"),
         "components": str(_runtime_get("APP_BACKUP_COMPONENTS", "db,env,data") or "db,env,data"),
-        "tg_enabled": bool(_runtime_get("APP_BACKUP_TG_ENABLED", False)),
-        "tg_admin_ids": str(_runtime_get("APP_BACKUP_TG_ADMIN_IDS", "") or ""),
         "az_enabled": bool(_runtime_get("APP_BACKUP_AZ_ENABLED", True)),
     }
 
@@ -689,16 +575,12 @@ def _set_backup_settings(
     interval_days,
     time_hhmm,
     components,
-    tg_enabled,
-    tg_admin_ids,
     az_enabled=True,
 ):
     _runtime_set("APP_BACKUP_ENABLED", bool(enabled))
     _runtime_set("APP_BACKUP_INTERVAL_DAYS", int(interval_days))
     _runtime_set("APP_BACKUP_TIME", (time_hhmm or "03:00").strip())
     _runtime_set("APP_BACKUP_COMPONENTS", (components or "db,env,data").strip())
-    _runtime_set("APP_BACKUP_TG_ENABLED", bool(tg_enabled))
-    _runtime_set("APP_BACKUP_TG_ADMIN_IDS", (tg_admin_ids or "").strip())
     _runtime_set("APP_BACKUP_AZ_ENABLED", bool(az_enabled))
 
 
@@ -1142,9 +1024,6 @@ def _reconcile_traffic_limit_policies():
         wg_access_policy_service.reconcile_client_policy(client_name, apply_runtime=True)
     for client_name in ovpn_clients:
         openvpn_access_policy_service.reconcile_client_policy(client_name)
-    if traffic_limit_notify_service is not None:
-        traffic_limit_notify_service.process_clients(protocol_scope="wg", client_names=wg_clients)
-        traffic_limit_notify_service.process_clients(protocol_scope="openvpn", client_names=ovpn_clients)
 
 
 traffic_persistence_service.on_after_persist = _reconcile_traffic_limit_policies
@@ -1226,8 +1105,6 @@ def _wg_set_traffic_limit_bytes(client_name, limit_bytes, *, period_days=None, a
         period_days=period_days,
         actor_username=actor_username,
     )
-    if traffic_limit_notify_service is not None:
-        traffic_limit_notify_service.process_client(protocol_scope="wg", client_name=client_name)
     return row
 
 
@@ -1236,8 +1113,6 @@ def _wg_clear_traffic_limit(client_name, *, actor_username=None):
         client_name,
         actor_username=actor_username,
     )
-    if traffic_limit_notify_service is not None:
-        traffic_limit_notify_service.process_client(protocol_scope="wg", client_name=client_name)
     return row
 
 
@@ -1248,8 +1123,6 @@ def _openvpn_set_traffic_limit_bytes(client_name, limit_bytes, *, period_days=No
         period_days=period_days,
         actor_username=actor_username,
     )
-    if traffic_limit_notify_service is not None:
-        traffic_limit_notify_service.process_client(protocol_scope="openvpn", client_name=client_name)
     return row
 
 
@@ -1258,8 +1131,6 @@ def _openvpn_clear_traffic_limit(client_name, *, actor_username=None):
         client_name,
         actor_username=actor_username,
     )
-    if traffic_limit_notify_service is not None:
-        traffic_limit_notify_service.process_client(protocol_scope="openvpn", client_name=client_name)
     return row
 
 
@@ -1341,54 +1212,8 @@ def _collect_logs_dashboard_data():
     )
 
 
-admin_notify_service = AdminNotifyService(
-    user_model=User,
-    get_env_value=_get_env_value,
-    logger=app.logger,
-)
-
-traffic_limit_notify_service = None
-try:
-    from core.services.traffic_limit_notify import TrafficLimitNotifyService
-
-    traffic_limit_notify_service = TrafficLimitNotifyService(
-        admin_notify_service=admin_notify_service,
-        wg_access_policy_service=wg_access_policy_service,
-        openvpn_access_policy_service=openvpn_access_policy_service,
-        config_paths=CONFIG_PATHS,
-        extract_client_name_from_config_file=_extract_client_name_from_config_file,
-        logger=app.logger,
-    )
-except Exception as _traffic_limit_notify_exc:
-    app.logger.warning(
-        "Не удалось инициализировать уведомления лимита трафика: %s",
-        _traffic_limit_notify_exc,
-    )
-
-
-def _send_tg_admin_notification(event_type, *, actor_username=None,
-                                 target_name=None, target_type=None,
-                                 remote_addr=None, details=None,
-                                 subject_name=None, client_timezone=None):
-    admin_notify_service.send(
-        event_type,
-        actor_username=actor_username,
-        target_name=target_name,
-        target_type=target_type,
-        remote_addr=remote_addr,
-        details=details,
-        subject_name=subject_name,
-        client_timezone=client_timezone,
-    )
-
-
 register_all_routes(app, sock, locals())
 
 from core.services.feature_guards import register_feature_guards
 
 register_feature_guards(app, get_env_value=_get_env_value)
-
-if not _SKIP_APP_BOOTSTRAP and bool(_runtime_get("MONITOR_ENABLED", True)):
-    admin_notify_service.start_monitor()
-elif not _SKIP_APP_BOOTSTRAP:
-    app.logger.info("Мониторинг нагрузки CPU/RAM отключён (MONITOR_ENABLED=false)")

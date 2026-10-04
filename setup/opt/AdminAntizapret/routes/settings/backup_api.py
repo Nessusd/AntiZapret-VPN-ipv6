@@ -6,7 +6,6 @@ from core.services.settings.post_handlers.maintenance import (
     handle_backup_delete,
     handle_backup_restore,
     handle_backup_settings,
-    handle_backup_test_telegram,
 )
 
 
@@ -58,7 +57,6 @@ def register_backup_api_routes(
     to_bool,
     ensure_app_backup_cron,
     log_user_action_event,
-    app_root,
 ):
     @app.route("/api/backups", methods=["GET"])
     @auth_manager.admin_required
@@ -110,20 +108,6 @@ def register_backup_api_routes(
             enqueue_background_task=enqueue_background_task,
             backup_manager_service=backup_manager_service,
             get_backup_settings=get_backup_settings,
-            log_user_action_event=log_user_action_event,
-        )
-        return _api_result(collector, extra=_task_extra(handler_result))
-
-    @app.route("/api/backups/test-telegram", methods=["POST"])
-    @auth_manager.admin_required
-    def api_backups_test_telegram():
-        collector = _FlashCollector()
-        handler_result = handle_backup_test_telegram(
-            {"backup_test_tg_action": "test"},
-            flash=collector,
-            session=session,
-            enqueue_background_task=enqueue_background_task,
-            app_root=app_root,
             log_user_action_event=log_user_action_event,
         )
         return _api_result(collector, extra=_task_extra(handler_result))

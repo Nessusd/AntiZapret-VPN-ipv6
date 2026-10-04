@@ -24,7 +24,6 @@ from core.services.traffic_limit import (
 )
 from core.services.request_user import get_current_user
 from utils.wg_runtime_subprocess import trigger_wg_policy_sync_background
-from tg_mini.session import has_telegram_mini_session
 
 
 # Полная синхронизация политик на каждый GET / создаёт лишнюю нагрузку и
@@ -94,18 +93,13 @@ def register_index_routes(
     wg_clear_traffic_limit,
     wg_reconcile_client_policy,
     wg_reconcile_all_policies,
-    log_telegram_audit_event,
     log_user_action_event,
-    send_tg_admin_notification=None,
     client_name_pattern=None,
 ):
     # Имя клиента передаётся в client.sh и в WG/AWG политики — валидируем его
     # тем же паттерном, что и остальные роуты (см. config_routes).
     if client_name_pattern is None:
         client_name_pattern = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-    def _has_telegram_mini_session() -> bool:
-        return has_telegram_mini_session(session)
 
     @app.route("/api/index-client-details", methods=["GET"])
     @auth_manager.login_required
@@ -273,21 +267,6 @@ def register_index_routes(
                         e,
                     )
 
-            is_tg_mini_action = _has_telegram_mini_session()
-            if is_tg_mini_action:
-                option_events = {
-                    "1": "mini_create_openvpn_config",
-                    "2": "mini_delete_openvpn_config",
-                    "4": "mini_create_wireguard_config",
-                    "5": "mini_delete_wireguard_config",
-                    "7": "mini_recreate_wireguard_config",
-                }
-                log_telegram_audit_event(
-                    option_events.get(str(option), "mini_index_action"),
-                    config_name=client_name,
-                    details=f"option={option} cert_days={cert_expire or '-'}",
-                )
-
             user_action_events = {
                 "1": ("config_create", "openvpn"),
                 "2": ("config_delete", "openvpn"),
@@ -297,8 +276,6 @@ def register_index_routes(
             }
             event_type, target_type = user_action_events.get(str(option), ("config_action", "config"))
             details_text = f"option={option} cert_days={cert_expire or '-'}"
-            if is_tg_mini_action:
-                details_text += " via=tg-mini"
             log_user_action_event(
                 event_type,
                 target_type=target_type,

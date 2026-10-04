@@ -167,8 +167,7 @@ body {
 .settings-form textarea,
 .input-field,
 .form-control,
-.viewer-config-search,
-.miniapp-link-input {
+.viewer-config-search {
   background: rgba(35, 48, 56, 0.84) !important;
   border: 1px solid #4b6170 !important;
   border-radius: 0.64rem !important;
@@ -181,8 +180,7 @@ body {
 .settings-form textarea:focus,
 .input-field:focus,
 .form-control:focus,
-.viewer-config-search:focus,
-.miniapp-link-input:focus {
+.viewer-config-search:focus {
   outline: none;
   border-color: rgba(130, 186, 168, 0.78) !important;
   box-shadow: 0 0 0 2px rgba(130, 186, 168, 0.18) !important;

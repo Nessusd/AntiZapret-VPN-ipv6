@@ -103,24 +103,6 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
         cron_kind="wg_policy_sync",
     ),
     FeatureToggleDefinition(
-        key="resource_monitor",
-        env_key="MONITOR_ENABLED",
-        label="Мониторинг нагрузки CPU/RAM",
-        description=(
-            "Фоновый поток проверки загрузки сервера и Telegram-уведомления "
-            "о высокой нагрузке (пороги настраиваются в разделе «Пользователи»)."
-        ),
-        icon="📈",
-        disable_hint="Telegram-оповещения о высокой нагрузке CPU/RAM перестанут отправляться.",
-        resource_impact_level="low",
-        resource_savings=(
-            "Оценка: фоновый поток в gunicorn, psutil раз в ~60 с (1 с замер CPU); "
-            "RAM пренебрежимо, CPU ~0,5–2% в среднем; без cron и дискового I/O."
-        ),
-        default=True,
-        group="background",
-    ),
-    FeatureToggleDefinition(
         key="active_web_sessions",
         env_key="ACTIVE_WEB_SESSION_TRACKING_ENABLED",
         label="Учёт активных сессий панели",
@@ -290,39 +272,6 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
         endpoints=("edit_files",),
     ),
     FeatureToggleDefinition(
-        key="telegram",
-        env_key="FEATURE_TELEGRAM_ENABLED",
-        label="Telegram",
-        description=(
-            "Telegram-авторизация, Mini App (/tg-mini) и связанные API. "
-            "Не влияет на Telegram-уведомления администраторам."
-        ),
-        icon="✈️",
-        disable_hint=(
-            "Вход через Telegram и Mini App будут недоступны. "
-            "Уведомления администраторам не затрагиваются."
-        ),
-        resource_impact_level="low",
-        resource_savings=(
-            "Фоновой нагрузки почти нет; нагрузка при входе через Telegram и работе Mini App "
-            "(HTTP-запросы к API)."
-        ),
-        default=True,
-        group="app_module",
-        endpoints=(
-            "auth_telegram",
-            "auth_telegram_mini",
-            "tg_mini_app",
-            "tg_mini_open",
-            "api_tg_mini_settings_get",
-            "api_tg_mini_settings_update",
-            "api_tg_mini_dashboard",
-            "api_tg_mini_send_config",
-            "api_tg_mini_check_bot_delivery",
-        ),
-        settings_anchors=("telegram-auth",),
-    ),
-    FeatureToggleDefinition(
         key="backups",
         env_key="FEATURE_BACKUPS_ENABLED",
         label="Резервные копии",
@@ -343,7 +292,6 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
             "api_backups_list",
             "api_backups_settings",
             "api_backups_create",
-            "api_backups_test_telegram",
             "api_backups_restore",
             "api_backups_delete",
         ),
@@ -353,7 +301,7 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
         env_key="FEATURE_USER_MANAGEMENT_ENABLED",
         label="Пользователи и доступ",
         description=(
-            "Вкладка «Пользователи и доступ»: учётные записи, роли, Telegram-уведомления "
+            "Вкладка «Пользователи и доступ»: учётные записи, роли "
             "и права viewer на конфиги."
         ),
         icon="👤",
@@ -367,7 +315,7 @@ FEATURE_TOGGLES: tuple[FeatureToggleDefinition, ...] = (
         ),
         default=True,
         group="app_module",
-        endpoints=("api_viewer_access", "api_monitor_settings", "api_tg_notify_test"),
+        endpoints=("api_viewer_access",),
         settings_anchors=("user-management",),
     ),
     FeatureToggleDefinition(

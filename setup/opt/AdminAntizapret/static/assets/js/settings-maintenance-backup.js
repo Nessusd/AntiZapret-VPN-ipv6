@@ -303,32 +303,6 @@
     }
   });
 
-  section.querySelector(".js-backup-send-tg")?.addEventListener("click", async (event) => {
-    const btn = event.currentTarget;
-    if (btn.disabled) return;
-    const confirmed = await askBackupConfirm({
-      message:
-        "Создать бэкапы панели и AntiZapret (если включён) и отправить архивы выбранным админам в Telegram?",
-    });
-    if (!confirmed) {
-      return;
-    }
-    setBusy(btn, true);
-    try {
-      const data = await apiFetch("/api/backups/test-telegram", { method: "POST" });
-      handleApiMessages(data, data.success ? "info" : "error");
-      if (data.success) {
-        await waitForBackupTaskAndRefresh(data, {
-          title: "Бэкап и отправка в Telegram…",
-        });
-      }
-    } catch (_err) {
-      notify("Ошибка сети при создании бэкапа и отправке в Telegram", "error");
-    } finally {
-      setBusy(btn, false);
-    }
-  });
-
   section.querySelector(".js-backup-create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;

@@ -13,7 +13,6 @@ def register_settings_routes(app, **deps):
         user_model=deps["user_model"],
         active_web_session_model=deps["active_web_session_model"],
         qr_download_audit_log_model=deps["qr_download_audit_log_model"],
-        telegram_mini_audit_log_model=deps["telegram_mini_audit_log_model"],
         user_action_log_model=deps["user_action_log_model"],
         ip_restriction=deps["ip_restriction"],
         collect_all_openvpn_files_for_access=deps["collect_all_openvpn_files_for_access"],
@@ -42,7 +41,6 @@ def register_settings_routes(app, **deps):
         backup_manager_service=deps["backup_manager_service"],
         maintenance_scheduler_service=deps["maintenance_scheduler_service"],
         runtime_set=deps["runtime_set"],
-        log_telegram_audit_event=deps["log_telegram_audit_event"],
         log_user_action_event=deps["log_user_action_event"],
     )
     register_backup_api_routes(
@@ -56,16 +54,11 @@ def register_settings_routes(app, **deps):
         to_bool=deps["to_bool"],
         ensure_app_backup_cron=deps["ensure_app_backup_cron"],
         log_user_action_event=deps["log_user_action_event"],
-        app_root=deps["app_root"],
     )
     register_settings_api_routes(
         app,
         auth_manager=deps["auth_manager"],
-        user_model=deps["user_model"],
         user_action_log_model=deps["user_action_log_model"],
-        set_env_value=deps["set_env_value"],
-        get_env_value=deps["get_env_value"],
-        log_user_action_event=deps["log_user_action_event"],
     )
     register_settings_antizapret_routes(app, auth_manager=deps["auth_manager"])
 

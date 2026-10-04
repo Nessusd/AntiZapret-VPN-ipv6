@@ -23,7 +23,6 @@ NOINDEX_PATH_PREFIXES = (
     "/logs_dashboard",
     "/edit-files",
     "/feature-disabled",
-    "/tg-mini",
     "/qr_download/",
     "/public_download/",
     "/captcha.png",
@@ -54,7 +53,7 @@ def get_csp_nonce() -> str:
 def build_content_security_policy(nonce: str | None = None) -> str:
     """Собирает CSP. При наличии nonce script-src использует его вместо
     'unsafe-inline' (браузеры игнорируют 'unsafe-inline' при наличии nonce)."""
-    script_src = "script-src 'self' https://telegram.org https://cdn.jsdelivr.net"
+    script_src = "script-src 'self' https://cdn.jsdelivr.net"
     if nonce:
         script_src += f" 'nonce-{nonce}'"
     else:
@@ -74,7 +73,7 @@ def build_content_security_policy(nonce: str | None = None) -> str:
         "font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com data:; "
         "img-src 'self' data: blob:; "
         "connect-src 'self'; "
-        "frame-src https://oauth.telegram.org https://telegram.org;"
+        "frame-src 'self';"
     )
 
 
@@ -125,7 +124,6 @@ Disallow: /download/
 Disallow: /captcha.png
 Disallow: /auth/
 Disallow: /ip-blocked
-Disallow: /tg-mini
 Disallow: /api/
 """
 

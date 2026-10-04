@@ -13,7 +13,6 @@ def register_settings_page_routes(
     user_model,
     active_web_session_model,
     qr_download_audit_log_model,
-    telegram_mini_audit_log_model,
     user_action_log_model,
     ip_restriction,
     collect_all_openvpn_files_for_access,
@@ -42,7 +41,6 @@ def register_settings_page_routes(
     backup_manager_service,
     maintenance_scheduler_service,
     runtime_set,
-    log_telegram_audit_event,
     log_user_action_event,
 ):
     @app.route("/settings", methods=["GET", "POST"])
@@ -77,7 +75,6 @@ def register_settings_page_routes(
                 runtime_set=runtime_set,
                 enqueue_background_task=enqueue_background_task,
                 task_restart_service=task_restart_service,
-                log_telegram_audit_event=log_telegram_audit_event,
                 log_user_action_event=log_user_action_event,
             )
             return redirect(redirect_target)
@@ -88,7 +85,6 @@ def register_settings_page_routes(
                 user_model=user_model,
                 active_web_session_model=active_web_session_model,
                 qr_download_audit_log_model=qr_download_audit_log_model,
-                telegram_mini_audit_log_model=telegram_mini_audit_log_model,
                 user_action_log_model=user_action_log_model,
                 ip_restriction=ip_restriction,
                 config_file_handler=config_file_handler,

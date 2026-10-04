@@ -37,26 +37,13 @@ set_env_value() {
 	local key="$1"
 	local value="$2"
 	local env_file="$INSTALL_DIR/.env"
-	local escaped_value
-
-	mkdir -p "$INSTALL_DIR"
-	[ -f "$env_file" ] || touch "$env_file"
-
-	escaped_value=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
-	if grep -q "^${key}=" "$env_file"; then
-		sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$env_file"
-	else
-		echo "${key}=${value}" >>"$env_file"
-	fi
+	printf '%s' "$value" | python3 "$INSTALL_DIR/utils/env_file.py" "$env_file" --set "$key"
 }
 
 set_secret_key_if_missing() {
 	local env_file="$INSTALL_DIR/.env"
 
-	mkdir -p "$INSTALL_DIR"
-	[ -f "$env_file" ] || touch "$env_file"
-
-	if grep -q '^SECRET_KEY=' "$env_file"; then
+	if grep -qE '^[[:space:]]*(export[[:space:]]+)?SECRET_KEY[[:space:]]*=' "$env_file" 2>/dev/null; then
 		return 0
 	fi
 
@@ -69,14 +56,14 @@ set_secret_key_if_missing() {
 		echo "${RED}Не удалось сгенерировать SECRET_KEY.${NC}" >&2
 		return 1
 	fi
-	set_env_value "SECRET_KEY" "$SECRET_KEY"
+	printf '%s' "$SECRET_KEY" | python3 "$INSTALL_DIR/utils/env_file.py" "$env_file" --default SECRET_KEY
 }
 
 unset_env_value() {
 	local key="$1"
 	local env_file="$INSTALL_DIR/.env"
 	[ -f "$env_file" ] || return 0
-	sed -i "/^${key}=/d" "$env_file"
+	python3 "$INSTALL_DIR/utils/env_file.py" "$env_file" --unset "$key"
 }
 
 ensure_certbot_available() {
@@ -161,7 +148,16 @@ check_openvpn_tcp_setting() {
 			echo "Вы можете отключить это резервирование для OpenVPN, чтобы использовать стандартные WEB порты для AdminAntizapret(y) или оставить как есть, выбрав другой порт(n)"
 			read -r -p "Отключить резервирование портов в OpenVPN? (y/n): " change_choice
 			if [[ "$change_choice" =~ ^[Yy]$ ]]; then
-				sed -i 's/^OPENVPN_80_443_TCP=y/OPENVPN_80_443_TCP=n/' /root/antizapret/setup
+				if ! (
+					umask 077
+					setup_file=$(realpath /root/antizapret/setup) || exit 1
+					exec {setup_lock}>"${setup_file}.lock" || exit 1
+					flock -x "$setup_lock" || exit 1
+					sed -i 's/^OPENVPN_80_443_TCP=y/OPENVPN_80_443_TCP=n/' "$setup_file"
+				); then
+					echo "${RED}Не удалось сохранить настройки OpenVPN.${NC}" >&2
+					return 1
+				fi
 				systemctl restart antizapret.service
 				echo "${GREEN}Резервирование портов в OpenVPN отключено и сервис перезапущен!${NC}"
 				return 0

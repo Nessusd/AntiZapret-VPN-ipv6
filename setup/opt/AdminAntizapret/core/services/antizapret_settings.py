@@ -1,6 +1,5 @@
-import re
-
 from config.antizapret_params import ANTIZAPRET_PARAMS
+from utils.shell_config import read_shell_assignments
 
 ANTIZAPRET_SETUP_FILE = "/root/antizapret/setup"
 
@@ -13,15 +12,15 @@ def read_antizapret_settings(path=ANTIZAPRET_SETUP_FILE):
     except OSError:
         content = ""
 
+    assignments = read_shell_assignments(content)
     settings = {}
     for p in ANTIZAPRET_PARAMS:
         key, env, typ, default = p["key"], p["env"], p["type"], p["default"]
+        value = assignments.get(env)
         if typ == "string":
-            m = re.search(rf"^{re.escape(env)}=(.+)$", content, re.M | re.I)
-            settings[key] = m.group(1).strip() if m else default
+            settings[key] = value if value is not None else default
         else:
-            m = re.search(rf"^{re.escape(env)}=([yn])$", content, re.M | re.I)
-            settings[key] = m.group(1).lower() if m else default
+            settings[key] = value.lower() if value is not None and value.lower() in {"y", "n"} else default
     return settings
 
 

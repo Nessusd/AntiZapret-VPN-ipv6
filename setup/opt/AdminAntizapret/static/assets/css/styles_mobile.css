@@ -207,9 +207,7 @@
   .cleanup-btn,
   .bw-range-btn,
   .iface-btn,
-  .unit-btn,
-  .tg-mini-range-btn,
-  .tg-mini-btn {
+  .unit-btn{
     min-height: 40px;
     font-size: 0.8rem;
   }
@@ -217,8 +215,7 @@
   .section-title-wrap h2,
   .section-title-wrap h3,
   .card-title,
-  .monitor-hero-title,
-  .tg-mini-panel h3 {
+  .monitor-hero-title{
     font-size: 0.96rem;
   }
 
@@ -227,14 +224,11 @@
   .logs-section,
   .editor-card,
   .system-info-section,
-  .bw-section,
-  .tg-mini-panel,
-  .tg-mini-card {
+  .bw-section{
     padding: 0.72rem;
   }
 
   .login-shell,
-  .tg-mini-shell,
   .logs-page-wrapper,
   .server-monitor-wrapper.page-unified-wrapper,
   .routing-wrapper.page-unified-wrapper,
@@ -443,7 +437,6 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .logs-page-wrapper,
   .server-monitor-wrapper.page-unified-wrapper,
   .main-layout.editfiles-layout,
-  .tg-mini-shell,
   .settings-layout,
   .settings-layout.page-unified-wrapper {
     width: 100% !important;
@@ -457,8 +450,6 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .metrics-grid,
   .bw-stats,
   .bw-aggregate,
-  .tg-mini-grid-2,
-  .tg-mini-cards,
   .client-cards-list {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -467,8 +458,6 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .section-actions,
   .cleanup-tools-row,
   .traffic-chart-controls,
-  .tg-mini-inline-controls,
-  .tg-mini-tabs,
   .protocol-tabs,
   .filter-buttons,
   .user-management-tabs {
@@ -479,7 +468,6 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   }
 
   .table-scroll,
-  .tg-mini-table-wrap,
   .ip-list,
   .logs-table,
   .config-table {
@@ -621,17 +609,13 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .btn,
   .btn-save,
   .btn-update,
-  .tg-mini-btn,
-  .tg-mini-tab,
   .tab-button,
   .filter-btn,
   .folder-btn {
     width: 100%;
   }
 
-  #telegram-auth .telegram-kpi-strip {
-    grid-template-columns: 1fr !important;
-  }
+
 }
 
 @media (min-width: 1440px) {
@@ -654,8 +638,7 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .routing-wrapper.page-unified-wrapper,
   .main-layout.editfiles-layout,
   .settings-layout,
-  .settings-layout.page-unified-wrapper,
-  .tg-mini-shell {
+  .settings-layout.page-unified-wrapper{
     max-width: 1720px;
     margin-inline: auto;
   }
@@ -682,8 +665,7 @@ body.nav-mobile-open.settings-nav-merged #sidebar.settings-page-wrapper {
   .routing-wrapper.page-unified-wrapper,
   .main-layout.editfiles-layout,
   .settings-layout,
-  .settings-layout.page-unified-wrapper,
-  .tg-mini-shell {
+  .settings-layout.page-unified-wrapper{
     max-width: 1880px;
   }
 }

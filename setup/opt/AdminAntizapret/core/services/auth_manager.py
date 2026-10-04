@@ -13,6 +13,8 @@ class AuthenticationManager:
     def login_required(self, f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            if "username" in session and get_current_user(self.user_model) is None:
+                session.clear()
             if "username" in session:
                 if self.ip_restriction.is_enabled():
                     client_ip = self.ip_restriction.get_client_ip()
