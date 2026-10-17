@@ -30,6 +30,11 @@ set_vpn_key_permissions() {
 		if [[ -d "$pki_dir" ]]; then
 			find "$pki_dir" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
 		fi
+		if [[ -f "$pki_dir/crl.pem" && ! -L "$pki_dir/crl.pem" ]]; then
+			# OpenVPN перечитывает CRL от nobody, поэтому нужен проход через PKI.
+			# Права на чтение каталога и приватных ключей не расширяем.
+			chmod go+x -- "$easyrsa_dir" "$pki_dir" || return 1
+		fi
 	done
 	if [[ -d "$wireguard_dir" ]]; then
 		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
@@ -2459,6 +2464,60 @@ health_error() {
 	return 26
 }
 
+openvpn_dco_kernel_module() {
+	local version=$1
+	case "$version" in
+		2.6.*)
+			# OpenVPN 2.6.0/2.6.1 использовали старый API, несовместимый с v2.
+			[[ "$version" =~ ^2\.6\.([0-9]+)([._-]|$) ]] || return 1
+			((10#${BASH_REMATCH[1]} >= 2)) || return 1
+			echo ovpn_dco_v2
+			;;
+		2.7|2.7.*|2.7_*) echo ovpn ;;
+		*) return 1 ;;
+	esac
+}
+
+prepare_installed_openvpn_dco() {
+	local version_info version module package
+	[[ "$OPENVPN_DCO" == 'y' ]] || return 0
+
+	# Пакетная версия станет основой новой сборки; старый /usr/local OpenVPN
+	# в этот момент ещё может находиться первым в PATH.
+	if ! version_info="$(/usr/sbin/openvpn --version)"; then
+		echo 'Error: Cannot read the installed OpenVPN package version'
+		return 20
+	fi
+	version="$(awk 'NR == 1 { print $2 }' <<< "$version_info")"
+	if ! module="$(openvpn_dco_kernel_module "$version")"; then
+		echo "Error: OpenVPN $version has no known compatible DCO kernel module"
+		return 20
+	fi
+	case "$module" in
+		ovpn_dco_v2) package=openvpn-dco-dkms ;;
+		ovpn) package=ovpn-dkms ;;
+	esac
+	if ! depmod -a; then
+		echo 'Error: Cannot refresh the kernel module index for OpenVPN DCO'
+		return 20
+	fi
+	if modprobe "$module"; then
+		return 0
+	fi
+	# Уже установленный, но не загружающийся модуль нельзя исправлять подменой ABI.
+	if modinfo "$module" >/dev/null 2>&1; then
+		echo "Error: The installed $module module cannot be loaded"
+		return 20
+	fi
+	# Для встроенного или уже установленного драйвера DKMS и headers не нужны.
+	if ! apt-get install -y "$package" "linux-headers-$(uname -r)" ||
+		! depmod -a || ! modprobe "$module"
+	then
+		echo "Error: Cannot install and load the compatible $module DCO module"
+		return 20
+	fi
+}
+
 wait_for_interface_address() {
 	local family=$1 interface=$2 expected=$3 attempt
 
@@ -2533,6 +2592,120 @@ wait_for_openvpn_listener() {
 	health_error "OpenVPN has no usable IPv$family $transport listener on port $port"
 }
 
+require_openvpn_crl_runtime() {
+	local name=$1 config="/etc/openvpn/server/$1.conf"
+	local unit="openvpn-server@$1.service" pid current_pid crl_file user
+
+	if ! crl_file="$(single_openvpn_value "$config" crl-verify)" ||
+		! user="$(single_openvpn_value "$config" user)"
+	then
+		health_error "$config must contain one CRL file and one user directive"
+		return 26
+	fi
+	if ! pid="$(systemctl show "$unit" -p MainPID --value)" ||
+		[[ ! "$pid" =~ ^[1-9][0-9]*$ ]]
+	then
+		health_error "$unit has no running OpenVPN process"
+		return 26
+	fi
+	# Проверяем публичный CRL с правами и cwd самого OpenVPN, а не root.
+	# Версия EasyRSA и наличие ручной ACL на результат не влияют.
+	if ! timeout --kill-after=1 10 python3 - "$pid" "$crl_file" "$user" <<'PY'
+import os
+import pwd
+import stat
+import sys
+import time
+
+pid, crl_path, username = sys.argv[1:]
+try:
+    expected_uid = int(username) if username.isdecimal() else pwd.getpwnam(username).pw_uid
+    status_path = "/proc/" + pid + "/status"
+    for attempt in range(50):
+        with open(status_path, encoding="ascii") as source:
+            status = dict(line.split(":", 1) for line in source if ":" in line)
+        uid = int(status["Uid"].split()[1])
+        if uid == expected_uid:
+            break
+        time.sleep(0.1)
+    else:
+        raise ValueError("OpenVPN has not dropped privileges to its configured user")
+    gid = int(status["Gid"].split()[1])
+    groups = [int(value) for value in status["Groups"].split()]
+    os.chdir("/proc/" + pid + "/cwd")
+    os.chroot("/proc/" + pid + "/root")
+    os.setgroups(groups)
+    os.setgid(gid)
+    os.setuid(uid)
+    if not stat.S_ISREG(os.stat(crl_path).st_mode):
+        raise ValueError("CRL is not a regular file")
+    with open(crl_path, "rb") as source:
+        if not source.read(1):
+            raise ValueError("CRL file is empty")
+except (OSError, KeyError, IndexError, ValueError) as error:
+    print("CRL readiness check failed: " + str(error), file=sys.stderr)
+    sys.exit(1)
+PY
+	then
+		health_error "$unit cannot stat and read its CRL after dropping privileges"
+		return 26
+	fi
+	if ! current_pid="$(systemctl show "$unit" -p MainPID --value)" || [[ "$current_pid" != "$pid" ]]; then
+		health_error "$unit changed its process during the CRL check"
+		return 26
+	fi
+}
+
+require_bgp_runtime() {
+	local pid current_pid capabilities
+	if ! pid="$(systemctl show antizapret-bgp.service -p MainPID --value)" ||
+		[[ ! "$pid" =~ ^[1-9][0-9]*$ ]] ||
+		! capabilities="$(awk '$1 == "CapEff:" { print $2 }' "/proc/$pid/status" 2>/dev/null)" ||
+		[[ ! "$capabilities" =~ ^[[:xdigit:]]{1,16}$ ]]
+	then
+		health_error 'BGP has no running process with readable capabilities'
+		return 26
+	fi
+	# Проверяем effective-права процесса: одного active/daemon-reload недостаточно.
+	if (( (16#$capabilities & 0x2400) != 0x2400 )); then
+		health_error 'BGP requires effective CAP_NET_BIND_SERVICE and CAP_NET_RAW'
+		return 26
+	fi
+	if ! current_pid="$(systemctl show antizapret-bgp.service -p MainPID --value)" || [[ "$current_pid" != "$pid" ]]; then
+		health_error 'BGP changed its process during the capability check'
+		return 26
+	fi
+}
+
+require_openvpn_dco_runtime() {
+	local name=$1 link_info
+	if ! link_info="$(ip -j -d link show dev "$name" 2>/dev/null)"; then
+		health_error "cannot inspect the requested OpenVPN DCO interface $name"
+		return 26
+	fi
+	# Проверяем фактический драйвер, а не только наличие модуля в ядре.
+	# Старый DCO v2 и новый ovpn имеют разные имена интерфейсного типа.
+	if ! python3 - "$name" "$link_info" <<'PY'
+import json
+import sys
+
+try:
+    links = json.loads(sys.argv[2])
+    valid = (
+        isinstance(links, list) and len(links) == 1
+        and links[0].get("ifname") == sys.argv[1]
+        and links[0].get("linkinfo", {}).get("info_kind") in {"ovpn-dco", "ovpn"}
+    )
+except (ValueError, TypeError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+PY
+	then
+		health_error "$name is not using the requested OpenVPN DCO driver"
+		return 26
+	fi
+}
+
 require_openvpn_runtime() {
 	local name=$1 transport=$2 ipv4_cidr=$3 ipv6_cidr=$4
 	local config="/etc/openvpn/server/$name.conf"
@@ -2540,28 +2713,36 @@ require_openvpn_runtime() {
 
 	if ! proto="$(single_openvpn_value "$config" proto)"; then
 		health_error "$config must contain exactly one valid proto directive"
+		return 26
 	fi
 	if ! port="$(single_openvpn_value "$config" port)" ||
 		[[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 ))
 	then
 		health_error "$config must contain exactly one valid port directive"
+		return 26
 	fi
 	if [[ "$DISABLE_IPV6" == 'y' ]]; then
 		[[ "$transport" == 'udp' ]] && expected_proto=udp4 || expected_proto=tcp4
 		if [[ "${proto,,}" != "$expected_proto" ]]; then
 			health_error "$config uses proto $proto instead of $expected_proto"
+			return 26
 		fi
-		wait_for_interface_address 4 "$name" "$ipv4_cidr"
-		wait_for_openvpn_listener "$transport" 4 "$port" n
+		wait_for_interface_address 4 "$name" "$ipv4_cidr" || return $?
+		wait_for_openvpn_listener "$transport" 4 "$port" n || return $?
 	else
 		[[ "$transport" == 'udp' ]] && expected_proto=udp6 || expected_proto=tcp6-server
 		if [[ "${proto,,}" != "$expected_proto" ]]; then
 			health_error "$config uses proto $proto instead of $expected_proto"
+			return 26
 		fi
-		wait_for_interface_address 4 "$name" "$ipv4_cidr"
-		wait_for_interface_address 6 "$name" "$ipv6_cidr"
-		wait_for_openvpn_listener "$transport" 6 "$port" y
+		wait_for_interface_address 4 "$name" "$ipv4_cidr" || return $?
+		wait_for_interface_address 6 "$name" "$ipv6_cidr" || return $?
+		wait_for_openvpn_listener "$transport" 6 "$port" y || return $?
 	fi
+	if [[ "${OPENVPN_DCO:-n}" == 'y' ]]; then
+		require_openvpn_dco_runtime "$name" || return $?
+	fi
+	require_openvpn_crl_runtime "$name"
 }
 
 require_wireguard_runtime() {
@@ -2902,8 +3083,8 @@ validate_cutover_runtime() {
 	[[ -n "$server_name" ]] || health_error 'system hostname is empty'
 
 	if [[ "$OPENVPN_UDP_ENABLE" == 'y' ]]; then
-		require_openvpn_runtime antizapret-udp udp "$IP.29.0.1/22" "$ANTIZAPRET_UDP_DNS6/64"
-		require_openvpn_runtime vpn-udp udp "$IP.28.0.1/22" "$VPN_UDP_DNS6/64"
+		require_openvpn_runtime antizapret-udp udp "$IP.29.0.1/22" "$ANTIZAPRET_UDP_DNS6/64" || return $?
+		require_openvpn_runtime vpn-udp udp "$IP.28.0.1/22" "$VPN_UDP_DNS6/64" || return $?
 		if [[ "$DISABLE_IPV6" != 'y' ]]; then
 			dns_queries+=(
 				"$ANTIZAPRET_UDP_DNS6" "$server_name" A "$IP.29.0.1"
@@ -2918,8 +3099,8 @@ validate_cutover_runtime() {
 		fi
 	fi
 	if [[ "$OPENVPN_TCP_ENABLE" == 'y' ]]; then
-		require_openvpn_runtime antizapret-tcp tcp "$IP.29.4.1/22" "$ANTIZAPRET_TCP_DNS6/64"
-		require_openvpn_runtime vpn-tcp tcp "$IP.28.4.1/22" "$VPN_TCP_DNS6/64"
+		require_openvpn_runtime antizapret-tcp tcp "$IP.29.4.1/22" "$ANTIZAPRET_TCP_DNS6/64" || return $?
+		require_openvpn_runtime vpn-tcp tcp "$IP.28.4.1/22" "$VPN_TCP_DNS6/64" || return $?
 		if [[ "$DISABLE_IPV6" != 'y' ]]; then
 			dns_queries+=(
 				"$ANTIZAPRET_TCP_DNS6" "$server_name" A "$IP.29.4.1"
@@ -2966,6 +3147,9 @@ validate_cutover_runtime() {
 			require_dns6_dnat antizapret "$ANTIZAPRET_WG_DNS6"
 			[[ "$VPN_DNS" != '1' ]] || require_dns6_dnat vpn "$VPN_WG_DNS6"
 		fi
+	fi
+	if [[ "$BGP_ENABLE" == 'y' ]]; then
+		require_bgp_runtime || return $?
 	fi
 	require_dns_runtime "${dns_queries[@]}"
 }
@@ -3329,7 +3513,7 @@ BGP_PACKAGE=
 [[ "$BGP_ENABLE" == 'y' ]] && BGP_PACKAGE=bird2
 OPENVPN_DCO_PACKAGES=()
 if [[ "$OPENVPN_DCO" == 'y' ]]; then
-	OPENVPN_DCO_PACKAGES=(ovpn-dkms "linux-headers-$(uname -r)")
+	OPENVPN_DCO_PACKAGES=(kmod)
 fi
 OPENVPN_PATCH_PACKAGES=()
 if [[ "$OPENVPN_PATCH" != '0' ]]; then
@@ -3346,13 +3530,7 @@ if [[ "$INSTALL_PANEL" == 'y' ]]; then
 	esac
 fi
 apt-get install -y $INSTALL $BGP_PACKAGE git openvpn iptables easy-rsa gawk knot-resolver idn sipcalc python3 wireguard diffutils socat lua-cqueues ipset irqbalance unattended-upgrades jq ethtool iproute2 logrotate "${OPENVPN_DCO_PACKAGES[@]}" "${OPENVPN_PATCH_PACKAGES[@]}" "${PANEL_PACKAGES[@]}"
-if [[ "$OPENVPN_DCO" == 'y' ]]; then
-	depmod -a
-	if ! modprobe ovpn; then
-		echo 'Error: OpenVPN DCO was requested, but the ovpn kernel module is unavailable'
-		exit 20
-	fi
-fi
+prepare_installed_openvpn_dco
 if ! validate_vpn_ipv6_prefix "$VPN_IPV6_PREFIX"; then
 	exit 14
 fi

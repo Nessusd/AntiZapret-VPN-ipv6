@@ -86,7 +86,10 @@ if [[ "${ANTIZAPRET_SETUP_RUN:-n}" != 'y' ]]; then
 	apt-get install -y openvpn curl tar build-essential pkg-config libssl-dev libsystemd-dev libnl-genl-3-dev libcap-ng-dev
 	apt-get clean
 fi
-VERSION="$(openvpn --version | head -n 1 | awk '{print $2}')"
+# После неудачного uninstall старая сборка в /usr/local может остаться в PATH.
+# Исходники берём для пакетной версии, под которую установщик выбрал DCO-драйвер.
+OPENVPN_VERSION_INFO="$(/usr/sbin/openvpn --version)"
+VERSION="$(awk 'NR == 1 { print $2 }' <<< "$OPENVPN_VERSION_INFO")"
 mkdir -p /usr/local/src/openvpn
 curl -fL --connect-timeout 30 https://build.openvpn.net/downloads/releases/openvpn-$VERSION.tar.gz -o /usr/local/src/openvpn.tar.gz || curl -fL --connect-timeout 30 https://github.com/OpenVPN/openvpn/releases/download/v$VERSION/openvpn-$VERSION.tar.gz -o /usr/local/src/openvpn.tar.gz
 tar --strip-components=1 -xvzf /usr/local/src/openvpn.tar.gz -C /usr/local/src/openvpn

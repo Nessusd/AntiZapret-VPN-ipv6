@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=simple
 User=bird
 Group=bird
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CAP_NET_RAW нужен BIRD для повторной привязки входящего сокета к интерфейсу.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
 RuntimeDirectory=antizapret-bgp
 RuntimeDirectoryMode=0755
 StateDirectory=antizapret-bgp

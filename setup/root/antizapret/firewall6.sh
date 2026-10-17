@@ -149,9 +149,8 @@ firewall_down() {
 	delete_chain nat "$PREROUTING_CHAIN"
 	delete_chain nat "$POSTROUTING_CHAIN"
 	ipset destroy antizapret-torrent6 2>/dev/null
-	if [[ "${ATTACK_PROTECTION:-n}" != 'y' || "${OPENVPN_TCP_ENABLE:-n}" != 'y' || "${DISABLE_IPV6:-n}" == 'y' ]]; then
-		ipset destroy antizapret-openvpn-scanner6 2>/dev/null
-	fi
+	# Набор удалённого детектора может остаться от прежней установки.
+	ipset destroy antizapret-openvpn-scanner6 2>/dev/null
 	set -e
 }
 

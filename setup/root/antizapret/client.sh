@@ -79,6 +79,11 @@ set_vpn_key_permissions() {
 		if [[ -d "$pki_dir" ]]; then
 			find "$pki_dir" -maxdepth 1 -type f -name '*.creds' -exec chmod 600 {} + || return 1
 		fi
+		if [[ -f "$pki_dir/crl.pem" && ! -L "$pki_dir/crl.pem" ]]; then
+			# OpenVPN перечитывает CRL от nobody, поэтому нужен проход через PKI.
+			# Права на чтение каталога и приватных ключей не расширяем.
+			chmod go+x -- "$easyrsa_dir" "$pki_dir" || return 1
+		fi
 	done
 	if [[ -d "$wireguard_dir" ]]; then
 		find "$wireguard_dir" -type d -exec chmod 700 {} + || return 1
@@ -463,6 +468,7 @@ deleteOpenVPN(){
 	/usr/share/easy-rsa/easyrsa --batch revoke "$CLIENT_NAME"
 	EASYRSA_CRL_DAYS=3650 /usr/share/easy-rsa/easyrsa gen-crl
 	chmod 644 /etc/openvpn/easyrsa3/pki/crl.pem
+	require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 
 	rm -f /root/antizapret/client/openvpn/antizapret/antizapret-"$FILE_NAME".ovpn
 	rm -f /root/antizapret/client/openvpn/antizapret-udp/antizapret-"$FILE_NAME"-udp.ovpn

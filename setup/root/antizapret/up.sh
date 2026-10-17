@@ -129,42 +129,6 @@ fi
 
 source setup
 
-load_openvpn_tcp_ports() {
-	local config proto port server_dir
-	server_dir="${OPENVPN_SERVER_DIR:-/etc/openvpn/server}"
-	OPENVPN_TCP_PORTS=
-	OPENVPN_TCP6_PORTS=
-	for config in \
-		"$server_dir/antizapret-tcp.conf" \
-		"$server_dir/vpn-tcp.conf"; do
-		[[ -f "$config" ]] || continue
-		proto="$(awk '$1 == "proto" { print tolower($2); exit }' "$config")"
-		[[ "$proto" == tcp* ]] || continue
-		port="$(awk '$1 == "port" { print $2; exit }' "$config")"
-		if [[ ! "$port" =~ ^[0-9]+$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
-			echo "Invalid OpenVPN TCP port in $config: ${port:-missing}" >&2
-			return 1
-		fi
-		port=$((10#$port))
-		case ",$OPENVPN_TCP_PORTS," in
-			*",$port,"*) ;;
-			*) OPENVPN_TCP_PORTS="${OPENVPN_TCP_PORTS:+$OPENVPN_TCP_PORTS,}$port" ;;
-		esac
-		case "$proto" in
-			tcp6|tcp6-server)
-				case ",$OPENVPN_TCP6_PORTS," in
-					*",$port,"*) ;;
-					*) OPENVPN_TCP6_PORTS="${OPENVPN_TCP6_PORTS:+$OPENVPN_TCP6_PORTS,}$port" ;;
-				esac
-				;;
-		esac
-	done
-	if [[ -z "$OPENVPN_TCP_PORTS" ]]; then
-		echo 'No enabled OpenVPN TCP server ports found!' >&2
-		return 1
-	fi
-}
-
 if [[ -z "$DEFAULT_INTERFACE" ]]; then
 	DEFAULT_INTERFACE="$(ip route get 1.2.3.4 2>/dev/null | grep -oP 'dev \K\S+')"
 	if [[ -z "$DEFAULT_INTERFACE" ]]; then
@@ -448,21 +412,6 @@ if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 	ipset create antizapret-watch hash:ip,port timeout 600 -exist
 	iptables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow src -j ACCEPT
 	ATTACK_INPUT_RULE=3
-	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' ]]; then
-		load_openvpn_tcp_ports
-		ipset create antizapret-openvpn-scanner hash:ip timeout 86400 -exist
-		if [[ "${DISABLE_IPV6:-n}" != 'y' && -n "$OPENVPN_TCP6_PORTS" ]]; then
-			ipset create antizapret-openvpn-scanner6 hash:ip family inet6 timeout 86400 -exist
-		fi
-		# Обычный OpenVPN TCP-кадр начинается с двухбайтовой длины пакета. Значение
-		# 0x1603 вместо неё отправляют HTTPS/TLS-сканеры в начале TLS ClientHello.
-		iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP_PORTS" -m conntrack --ctstate ESTABLISHED -m u32 --u32 '0>>22&0x3C@12>>26&0x3C@0>>16&0xFFFF=0x1603' -m comment --comment antizapret-openvpn-scanner-detect -j SET --add-set antizapret-openvpn-scanner src --exist --timeout 86400
-		ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
-		iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP_PORTS" -m set --match-set antizapret-openvpn-scanner src -m comment --comment antizapret-openvpn-scanner-drop -j DROP
-		ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
-	else
-		ipset destroy antizapret-openvpn-scanner 2>/dev/null || true
-	fi
 	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 24 --hashlimit-name antizapret-scan --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
 	ATTACK_INPUT_RULE=$((ATTACK_INPUT_RULE + 1))
 	iptables -w -I INPUT "$ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block src --exist
@@ -475,18 +424,6 @@ if [[ "$ATTACK_PROTECTION" == 'y' ]]; then
 	ipset create antizapret-watch6 hash:ip,port timeout 600 family inet6 -exist
 	ip6tables -w -I INPUT 2 -i $DEFAULT_INTERFACE -m set --match-set antizapret-allow6 src -j ACCEPT
 	IPV6_ATTACK_INPUT_RULE=3
-	if [[ "${OPENVPN_TCP_ENABLE:-n}" == 'y' && "${DISABLE_IPV6:-n}" != 'y' && -n "$OPENVPN_TCP6_PORTS" ]]; then
-		# u32 ниже считает TCP сразу после IPv6. Необычные extension headers
-		# запоминаем как тот же сканер; следующее set-правило сразу его отбросит.
-		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m conntrack --ctstate ESTABLISHED -m ipv6header ! --header prot -m comment --comment antizapret-openvpn-scanner6-extension-detect -j SET --add-set antizapret-openvpn-scanner6 src --exist --timeout 86400
-		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
-		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m conntrack --ctstate ESTABLISHED -m u32 --u32 '52>>26&0x3C@40>>16&0xFFFF=0x1603' -m comment --comment antizapret-openvpn-scanner6-detect -j SET --add-set antizapret-openvpn-scanner6 src --exist --timeout 86400
-		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
-		ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -p tcp -m multiport --dports "$OPENVPN_TCP6_PORTS" -m set --match-set antizapret-openvpn-scanner6 src -m comment --comment antizapret-openvpn-scanner6-drop -j DROP
-		IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
-	else
-		ipset destroy antizapret-openvpn-scanner6 2>/dev/null || true
-	fi
 	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m set ! --match-set antizapret-watch6 src,dst -m hashlimit --hashlimit-above 20/hour --hashlimit-burst 20 --hashlimit-mode srcip --hashlimit-srcmask 64 --hashlimit-name antizapret-scan6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
 	IPV6_ATTACK_INPUT_RULE=$((IPV6_ATTACK_INPUT_RULE + 1))
 	ip6tables -w -I INPUT "$IPV6_ATTACK_INPUT_RULE" -i $DEFAULT_INTERFACE -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 100000/hour --hashlimit-burst 100000 --hashlimit-mode srcip --hashlimit-name antizapret-ddos6 --hashlimit-htable-expire 600000 -j SET --add-set antizapret-block6 src --exist
