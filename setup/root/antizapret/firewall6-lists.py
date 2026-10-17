@@ -306,6 +306,9 @@ def managed_client_names() -> set[str]:
             if (
                 OPENVPN_CLIENT_PREFIX_TAG in text
                 or OPENVPN_CLIENT_ROUTE_MODE_TAG in text
+                # После удаления routed-префикса ручные CCD-строки требуют
+                # персонального DEFAULT-блока; он по-прежнему управляемый.
+                or OPENVPN_CLIENT_DEFAULT_BEGIN in text.splitlines()
             ):
                 names.add(validate_client_name(path.name))
     return names

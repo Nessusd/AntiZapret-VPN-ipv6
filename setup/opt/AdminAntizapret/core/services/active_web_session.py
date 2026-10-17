@@ -3,6 +3,8 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 
+from utils.client_ip import get_client_ip
+
 
 class ActiveWebSessionService:
     def __init__(
@@ -51,7 +53,7 @@ class ActiveWebSessionService:
                 return
 
         sid = self.get_or_create_auth_session_id(session_obj)
-        remote_addr = ((request_obj.headers.get("X-Forwarded-For") or request_obj.remote_addr or "").split(",", 1)[0]).strip()
+        remote_addr = get_client_ip(request_obj) or "unknown"
         user_agent = (request_obj.headers.get("User-Agent") or "")[:255]
 
         row = self.active_web_session_model.query.filter_by(session_id=sid).first()

@@ -4,15 +4,17 @@ from utils.shell_config import read_shell_assignments
 ANTIZAPRET_SETUP_FILE = "/root/antizapret/setup"
 
 
-def read_antizapret_settings(path=ANTIZAPRET_SETUP_FILE):
-    """Читает antizapret setup и возвращает dict {key: value}."""
+def _read_setup_assignments(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
+            return read_shell_assignments(f.read())
     except OSError:
-        content = ""
+        return {}
 
-    assignments = read_shell_assignments(content)
+
+def read_antizapret_settings(path=ANTIZAPRET_SETUP_FILE):
+    """Читает antizapret setup и возвращает dict {key: value}."""
+    assignments = _read_setup_assignments(path)
     settings = {}
     for p in ANTIZAPRET_PARAMS:
         key, env, typ, default = p["key"], p["env"], p["type"], p["default"]
@@ -30,3 +32,9 @@ def is_antizapret_ipv6_enabled(settings=None):
         settings if settings is not None else read_antizapret_settings()
     )
     return str(current_settings.get("disable_ipv6", "n")).strip().lower() != "y"
+
+
+def is_antizapret_bgp_enabled(path=ANTIZAPRET_SETUP_FILE):
+    """Общий BGP-флаг принадлежит AntiZapret, а не окружению панели."""
+    value = _read_setup_assignments(path).get("BGP_ENABLE")
+    return isinstance(value, str) and value.strip().lower() == "y"

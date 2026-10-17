@@ -316,12 +316,18 @@ class BackgroundTaskService:
         self,
         sync_wireguard_peer_cache_callback: Callable[..., Any] | None = None,
         progress_updater: Callable[[int, str, str | None], None] | None = None,
+        *,
+        apply_runtime: bool = False,
     ) -> dict[str, str]:
         install_dir = self._antizapret_install_dir()
         doall_sh = os.path.join(install_dir, "doall.sh")
+        args = [doall_sh]
+        if apply_runtime:
+            args.append("--apply")
         if progress_updater:
-            progress_updater(10, "AntiZapret: запуск doall.sh…")
-        stdout, stderr = self.run_checked_command([doall_sh], timeout=900)
+            stage = "обновление списков и применение настроек" if apply_runtime else "обновление списков"
+            progress_updater(10, f"AntiZapret: {stage}…")
+        stdout, stderr = self.run_checked_command(args, cwd=install_dir, timeout=900)
         if progress_updater:
             progress_updater(65, "AntiZapret: пересоздание профилей клиентов…")
         recreate_stdout, recreate_stderr = self._run_client_sh_recreate_profiles(install_dir)
@@ -342,7 +348,11 @@ class BackgroundTaskService:
             if part
         ).strip()
         return {
-            "message": "doall и пересоздание профилей клиентов выполнены успешно",
+            "message": (
+                "Настройки AntiZapret применены, профили клиентов пересозданы"
+                if apply_runtime
+                else "Списки AntiZapret обновлены, профили клиентов пересозданы"
+            ),
             "output": combined,
         }
 

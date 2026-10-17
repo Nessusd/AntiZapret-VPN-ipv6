@@ -343,7 +343,7 @@ def _log_user_action_event(
             if actor:
                 actor_user_id = actor.id
 
-        remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
+        remote_addr = _get_client_ip()
         user_agent = (request.headers.get("User-Agent") or "")[:255]
 
         db.session.add(
@@ -420,9 +420,11 @@ def _run_checked_command(args, cwd=None, timeout=120):
     return background_task_service.run_checked_command(args, cwd=cwd, timeout=timeout)
 
 
-def _task_run_doall():
+def _task_run_doall(*, apply_runtime=False, progress_updater=None):
     return background_task_service.task_run_doall(
         sync_wireguard_peer_cache_callback=_sync_wireguard_peer_cache_from_configs,
+        apply_runtime=apply_runtime,
+        progress_updater=progress_updater,
     )
 
 

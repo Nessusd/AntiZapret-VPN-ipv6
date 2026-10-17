@@ -12,6 +12,7 @@ from core.services.panel_publish_info import is_whitelist_port_firewall_applicab
 from ip_blocked.constants import IP_BLOCKED_ACCESS_ENDPOINTS
 from utils.panel_port_firewall import PanelPortFirewall
 from utils.env_file import update_env_file
+from utils.client_ip import is_trusted_proxy, resolve_client_ip
 from utils.scanner_firewall_store import ScannerFirewallStore
 from utils.temporary_whitelist_store import (
     DURATION_LABELS,
@@ -139,32 +140,7 @@ class IPRestriction:
         return [entry.strip() for entry in str(trusted_raw).split(',') if entry.strip()]
 
     def _is_trusted_proxy(self, remote_ip):
-        if not remote_ip:
-            return False
-
-        entries = self._get_trusted_proxy_entries()
-        if not entries:
-            return False
-
-        if '*' in entries:
-            return True
-
-        try:
-            remote_addr = ipaddress.ip_address(remote_ip)
-        except ValueError:
-            return False
-
-        for entry in entries:
-            try:
-                if '/' in entry:
-                    if remote_addr in ipaddress.ip_network(entry, strict=False):
-                        return True
-                elif remote_addr == ipaddress.ip_address(entry):
-                    return True
-            except ValueError:
-                continue
-
-        return False
+        return is_trusted_proxy(remote_ip, self._get_trusted_proxy_entries())
 
     def _normalize_ip_entry(self, ip_or_network):
         value = (ip_or_network or '').strip()
@@ -299,19 +275,7 @@ class IPRestriction:
 
     def get_client_ip(self):
         """Получаем IP клиента"""
-        remote_ip = (request.remote_addr or '').strip()
-        ip = remote_ip
-
-        if self._is_trusted_proxy(remote_ip):
-            if request.headers.get('X-Forwarded-For'):
-                ip = request.headers.get('X-Forwarded-For').split(',')[0].strip()
-            elif request.headers.get('X-Real-IP'):
-                ip = request.headers.get('X-Real-IP', '').strip()
-
-        if ip and ip.startswith('::ffff:'):
-            ip = ip[7:]
-
-        return ip or remote_ip
+        return resolve_client_ip(request, self._get_trusted_proxy_entries())
 
     def _firewall_whitelist_entries(self):
         """Постоянные и активные временные записи для iptables whitelist порта."""

@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tarfile
 from datetime import datetime, timezone
@@ -60,9 +61,9 @@ class BackupManagerService:
         return result or self.default_components()
 
     def list_backups(self):
-        os.makedirs(self.backup_root, exist_ok=True)
+        self._ensure_private_backup_root()
         archive_paths = sorted(
-            glob.glob(os.path.join(self.backup_root, "*.tar.gz")),
+            self._archive_paths("*.tar.gz"),
             key=lambda p: os.path.getmtime(p),
             reverse=True,
         )
@@ -157,7 +158,7 @@ class BackupManagerService:
     def create_backup(self, *, selected_components, trigger="manual"):
         # Согласованные экспорты БД готовятся до упаковки и удаляются вместе с
         # временным каталогом независимо от результата создания архива.
-        os.makedirs(self.backup_root, exist_ok=True)
+        self._ensure_private_backup_root()
         components = self.normalize_components(selected_components)
         file_map, db_prepared, db_without_cidr = self._collect_component_files(components)
         tar_entries = self._build_tar_entries(file_map, db_prepared)
@@ -171,10 +172,14 @@ class BackupManagerService:
         meta_path = os.path.join(self.backup_root, f"full_backup_{stamp}.meta.json")
 
         cleanup_dirs = [p.cleanup_dir for p in db_prepared if p.cleanup_dir]
+        created_paths = []
         try:
-            with tarfile.open(archive_path, "w:gz") as tar:
-                for file_path, arcname in tar_entries:
-                    tar.add(file_path, arcname=arcname, recursive=False)
+            # O_EXCL не позволяет затереть существующий архив или пройти по ссылке.
+            with self._create_private_file(archive_path, "wb") as output:
+                created_paths.append(archive_path)
+                with tarfile.open(fileobj=output, mode="w:gz") as tar:
+                    for file_path, arcname in tar_entries:
+                        tar.add(file_path, arcname=arcname, recursive=False)
 
             with tarfile.open(archive_path, "r:gz"):
                 pass
@@ -187,7 +192,8 @@ class BackupManagerService:
                 trigger=trigger,
                 db_without_cidr=db_without_cidr,
             )
-            with open(meta_path, "w", encoding="utf-8") as fh:
+            with self._create_private_file(meta_path, "w", encoding="utf-8") as fh:
+                created_paths.append(meta_path)
                 json.dump(metadata, fh, ensure_ascii=False, indent=2)
 
             self.prune_old_backups()
@@ -197,14 +203,23 @@ class BackupManagerService:
                 "meta_path": meta_path,
                 "metadata": metadata,
             }
+        except Exception:
+            for path in created_paths:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            raise
         finally:
             for cleanup_dir in cleanup_dirs:
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
 
     def restore_backup(self, backup_name):
+        self._ensure_private_backup_root()
         return self.restore_jobs.run_synchronous(backup_name)
 
     def queue_restore(self, backup_name):
+        self._ensure_private_backup_root()
         return self.restore_jobs.queue(backup_name)
 
     def run_restore_job(self, job_id):
@@ -228,6 +243,7 @@ class BackupManagerService:
         }
 
     def resolve_backup_path(self, backup_name):
+        self._ensure_private_backup_root()
         # Проверка commonpath не позволяет имени архива выйти за backup_root.
         raw = str(backup_name or "").strip()
         if not raw:
@@ -236,15 +252,20 @@ class BackupManagerService:
             path = os.path.abspath(raw)
         else:
             path = os.path.abspath(os.path.join(self.backup_root, os.path.basename(raw)))
-        if os.path.commonpath([self.backup_root, path]) != self.backup_root:
+        if (
+            os.path.commonpath([self.backup_root, path]) != self.backup_root
+            or os.path.realpath(path) != path
+        ):
             raise ValueError("Недопустимый путь к бэкапу")
+        if os.path.exists(path) and not self._is_regular_backup_file(path):
+            raise ValueError("Недопустимый файл бэкапа")
         return path
 
     def read_backup_metadata(self, archive_path):
         archive_base = os.path.basename(archive_path)
         prefix = archive_base[:-7] if archive_base.endswith(".tar.gz") else archive_base
         meta_json_path = os.path.join(self.backup_root, f"{prefix}.meta.json")
-        if os.path.isfile(meta_json_path):
+        if self._is_regular_backup_file(meta_json_path):
             try:
                 with open(meta_json_path, "r", encoding="utf-8") as fh:
                     meta = json.load(fh)
@@ -259,7 +280,7 @@ class BackupManagerService:
                 pass
 
         meta_txt_path = os.path.join(self.backup_root, f"{prefix}.meta.txt")
-        if os.path.isfile(meta_txt_path):
+        if self._is_regular_backup_file(meta_txt_path):
             created_at = ""
             items_count = 0
             try:
@@ -289,14 +310,81 @@ class BackupManagerService:
         return self._inspect_tar_summary(archive_path)
 
     def prune_old_backups(self):
+        self._ensure_private_backup_root()
         archive_paths = sorted(
-            glob.glob(os.path.join(self.backup_root, "full_backup_*.tar.gz")),
+            self._archive_paths("full_backup_*.tar.gz"),
             key=lambda p: os.path.getmtime(p),
             reverse=True,
         )
         stale = archive_paths[self.retention_count :]
         for archive_path in stale:
             self._remove_backup_files(archive_path)
+
+    def _ensure_private_backup_root(self):
+        # Проверяем каждый компонент через dir_fd: chmod не должен следовать
+        # подставленной ссылке ни в самом каталоге, ни в его родителях.
+        if self.backup_root == os.path.sep:
+            raise ValueError("Корневой каталог нельзя использовать для бэкапов")
+        directory_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for component in self.backup_root.split(os.sep):
+                if not component:
+                    continue
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=directory_fd)
+                except FileExistsError:
+                    pass
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                os.close(directory_fd)
+                directory_fd = child_fd
+            os.fchmod(directory_fd, 0o700)
+            # Закрываем доступ и к архивам, созданным предыдущими версиями.
+            for name in os.listdir(directory_fd):
+                if not name.endswith((".tar.gz", ".meta.json", ".meta.txt")):
+                    continue
+                try:
+                    file_fd = os.open(
+                        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=directory_fd,
+                    )
+                except OSError:
+                    continue
+                try:
+                    info = os.fstat(file_fd)
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        os.fchmod(file_fd, 0o600)
+                finally:
+                    os.close(file_fd)
+        finally:
+            os.close(directory_fd)
+
+    @staticmethod
+    def _create_private_file(path, mode, **kwargs):
+        file_fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(file_fd, 0o600)
+            return os.fdopen(file_fd, mode, **kwargs)
+        except Exception:
+            os.close(file_fd)
+            raise
+
+    @staticmethod
+    def _is_regular_backup_file(path):
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        return stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and os.path.realpath(path) == path
+
+    def _archive_paths(self, pattern):
+        return [
+            path for path in glob.glob(os.path.join(self.backup_root, pattern))
+            if self._is_regular_backup_file(path)
+        ]
 
     def _remove_backup_files(self, archive_path):
         prefix = os.path.basename(archive_path).replace(".tar.gz", "")

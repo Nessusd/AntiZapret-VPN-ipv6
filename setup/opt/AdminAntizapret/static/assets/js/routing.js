@@ -168,7 +168,7 @@ document.addEventListener("DOMContentLoaded", () => {
         "Content-Type": "application/json",
         "X-CSRFToken": csrfToken(),
       },
-      body: JSON.stringify({ context: "Применение настроек AntiZapret" }),
+      body: JSON.stringify({ context: "Применение настроек AntiZapret", apply_runtime: true }),
     });
 
     if (payload.queued && payload.task_id) {

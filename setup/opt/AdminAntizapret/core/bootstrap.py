@@ -9,7 +9,7 @@ WebSocket, rate limiter, WAL-режим SQLite) от регистрации се
 import os
 import sqlite3 as _sqlite3
 
-from flask import Flask, request
+from flask import Flask
 from flask_sock import Sock
 from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import event as _sa_event
@@ -46,9 +46,9 @@ def _set_sqlite_wal(dbapi_conn, _conn_record):
 def _get_client_ip():
     """Единая точка определения IP клиента с учётом TRUSTED_PROXY_IPS."""
     try:
-        return ip_restriction.get_client_ip() or (request.remote_addr or "127.0.0.1")
+        return ip_restriction.get_client_ip() or "unknown"
     except Exception:
-        return request.remote_addr or "127.0.0.1"
+        return "unknown"
 
 
 def _rate_limit_key_func():

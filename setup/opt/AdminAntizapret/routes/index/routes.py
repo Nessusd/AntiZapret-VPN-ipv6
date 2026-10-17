@@ -5,7 +5,10 @@ import time
 
 from flask import jsonify, render_template, request, session, url_for
 
-from core.services.antizapret_settings import is_antizapret_ipv6_enabled
+from core.services.antizapret_settings import (
+    is_antizapret_bgp_enabled,
+    is_antizapret_ipv6_enabled,
+)
 from core.services.feature_guards import check_index_post_option
 from core.services.feature_toggles import is_app_module_enabled
 
@@ -174,7 +177,7 @@ def register_index_routes(
             )
             context["service_statuses"] = collect_grouped_service_statuses()
             context["ipv6_enabled"] = is_antizapret_ipv6_enabled()
-            context["bgp_enabled"] = str(get_env_value("BGP_ENABLE", "n")).lower() == "y"
+            context["bgp_enabled"] = is_antizapret_bgp_enabled()
             return render_template("index.html", **context)
 
         post_user = get_current_user(user_model)
@@ -219,7 +222,7 @@ def register_index_routes(
 
             if option == "1" and not cert_expire:
                 return jsonify({"success": False, "message": "Укажите срок действия сертификата."}), 400
-            if route_mode == "bgp" and str(get_env_value("BGP_ENABLE", "n")).lower() != "y":
+            if route_mode == "bgp" and not is_antizapret_bgp_enabled():
                 return jsonify({"success": False, "message": "BGP отключён в конфигурации AntiZapret."}), 400
             if routed_ipv6_prefix and not is_antizapret_ipv6_enabled():
                 return jsonify({"success": False, "message": "IPv6 отключён в конфигурации AntiZapret."}), 400

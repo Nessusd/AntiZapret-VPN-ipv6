@@ -210,8 +210,12 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	sed 's/\r//g; /^;/d; /^$/d' download/*rpz.txt config/*rpz.txt >> result/deny.rpz
 	sed 's/\r//g; /^;/d; /^$/d' download/*rpz2.txt config/*rpz2.txt >> result/deny2.rpz
 
-	# Обновляем файл deny.rpz в Knot Resolver только если файл изменился
-	if [[ -f result/deny.rpz ]] && ! diff -q result/deny.rpz /etc/knot-resolver/deny.rpz; then
+	# Повторная публикация исправляет и закрытые права от прежних обновлений,
+	# даже если содержимое списка не изменилось.
+	if [[ -f result/deny.rpz ]] && {
+		! diff -q result/deny.rpz /etc/knot-resolver/deny.rpz ||
+		[[ "$(stat -c '%a' /etc/knot-resolver/deny.rpz)" != '644' ]]
+	}; then
 		cp -f result/deny.rpz /etc/knot-resolver/deny.rpz.tmp
 		# Публичный RPZ читает kresd, поэтому не наследуем закрытый umask root.
 		chmod 0644 /etc/knot-resolver/deny.rpz.tmp
@@ -219,8 +223,11 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 		sleep 5
 	fi
 
-	# Обновляем файл deny2.rpz в Knot Resolver только если файл изменился
-	if [[ -f result/deny2.rpz ]] && ! diff -q result/deny2.rpz /etc/knot-resolver/deny2.rpz; then
+	# Для второго RPZ также проверяем содержимое и доступность для kresd.
+	if [[ -f result/deny2.rpz ]] && {
+		! diff -q result/deny2.rpz /etc/knot-resolver/deny2.rpz ||
+		[[ "$(stat -c '%a' /etc/knot-resolver/deny2.rpz)" != '644' ]]
+	}; then
 		cp -f result/deny2.rpz /etc/knot-resolver/deny2.rpz.tmp
 		chmod 0644 /etc/knot-resolver/deny2.rpz.tmp
 		mv -f /etc/knot-resolver/deny2.rpz.tmp /etc/knot-resolver/deny2.rpz
@@ -286,8 +293,11 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	sed '/^\.$/ s/.*/*. CNAME ./; t; s/$/ CNAME ./; p; s/^/*./' result/include-hosts.txt >> result/proxy.rpz
 	sed '/^\.$/ s/.*/*. CNAME rpz-passthru./; t; s/$/ CNAME rpz-passthru./; p; s/^/*./' result/exclude-hosts.txt >> result/proxy.rpz
 
-	# Обновляем файл proxy.rpz в Knot Resolver только если файл изменился
-	if [[ -f result/proxy.rpz ]] && ! diff -q result/proxy.rpz /etc/knot-resolver/proxy.rpz; then
+	# Исправляем старые права и здесь, не дожидаясь изменения доменов.
+	if [[ -f result/proxy.rpz ]] && {
+		! diff -q result/proxy.rpz /etc/knot-resolver/proxy.rpz ||
+		[[ "$(stat -c '%a' /etc/knot-resolver/proxy.rpz)" != '644' ]]
+	}; then
 		cp -f result/proxy.rpz /etc/knot-resolver/proxy.rpz.tmp
 		chmod 0644 /etc/knot-resolver/proxy.rpz.tmp
 		mv -f /etc/knot-resolver/proxy.rpz.tmp /etc/knot-resolver/proxy.rpz

@@ -5,10 +5,12 @@
         <p class="settings-workbench__kicker">Маршрутизация</p>
         <h1 class="settings-workbench__title">Управление трафиком</h1>
         <p class="settings-workbench__subtitle">Настройте сервисы и защитные функции AntiZapret.</p>
+        <p class="settings-workbench__subtitle" id="routing-apply-note">Применение перезапускает основную службу AntiZapret:
+          возможно краткое прерывание трафика. Остановленные службы VPN не запускаются.</p>
       </div>
       <div class="settings-workbench__meta">
         <span id="workbench-dirty-state" class="workbench-state workbench-state-applied">Применено</span>
-        <button id="workbench-primary-apply" type="button" class="button save-button">Применить изменения</button>
+        <button id="workbench-primary-apply" type="button" class="button save-button" aria-describedby="routing-apply-note">Применить изменения</button>
       </div>
     </section>
 
@@ -19,6 +21,6 @@
       <div class="settings-sticky-actions__buttons">
         <button id="sticky-cancel" type="button" class="button">Отменить</button>
         <button id="sticky-save" type="button" class="button save-button">Сохранить</button>
-        <button id="sticky-apply" type="button" class="button save-button">Применить</button>
+        <button id="sticky-apply" type="button" class="button save-button" aria-describedby="routing-apply-note">Применить</button>
       </div>
     </div>

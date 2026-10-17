@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 from datetime import datetime, timezone
+from functools import partial
 
 from core.services.time_utils import as_utc
 
@@ -29,6 +30,7 @@ from core.services.traffic_limit import (
     parse_traffic_limit_period_days,
 )
 from core.services.config_download import build_short_download_name
+from utils.client_ip import get_client_ip as resolve_request_client_ip
 
 
 def register_config_routes(
@@ -79,10 +81,7 @@ def register_config_routes(
                 return get_client_ip() or "unknown"
             except Exception:
                 pass
-        return (
-            (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0].strip()
-            or "unknown"
-        )
+        return resolve_request_client_ip() or "unknown"
 
     @app.route("/api/openvpn/client-block", methods=["POST"])
     @auth_manager.admin_required
@@ -487,10 +486,13 @@ def register_config_routes(
         try:
             _body = request.get_json(silent=True) or {}
             _context = (_body.get("context") or "").strip()[:300] or None
+            # Только явное применение сетевых настроек перезапускает runtime.
+            # Редактор списков сохраняет прежний режим doall без перезапуска.
+            apply_runtime = _body.get("apply_runtime") is True
 
             task = enqueue_background_task(
                 "run_doall",
-                task_run_doall,
+                partial(task_run_doall, apply_runtime=apply_runtime),
                 created_by_username=session.get("username"),
                 queued_message="Запуск doall поставлен в очередь",
             )

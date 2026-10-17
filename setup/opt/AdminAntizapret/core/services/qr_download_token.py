@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from flask import request, session, url_for
 
 from core.services.request_user import get_current_user, get_user_by_username
+from utils.client_ip import get_client_ip
 
 
 class QrDownloadTokenService:
@@ -85,7 +86,7 @@ class QrDownloadTokenService:
             )
         ).delete(synchronize_session=False)
 
-        remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
+        remote_addr = get_client_ip() or "unknown"
         user_agent = (request.headers.get("User-Agent") or "")[:255]
         self.db.session.add(
             self.qr_download_audit_log_model(
@@ -112,7 +113,7 @@ class QrDownloadTokenService:
                 if actor:
                     actor_user_id = actor.id
 
-            remote_addr = ((request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",", 1)[0]).strip()
+            remote_addr = get_client_ip() or "unknown"
             user_agent = (request.headers.get("User-Agent") or "")[:255]
 
             self.db.session.add(

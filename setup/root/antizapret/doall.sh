@@ -2,6 +2,11 @@
 set -eo pipefail
 
 SECONDS=0
+APPLY_RUNTIME_CONFIG=n
+if [[ "${1:-}" == '--apply' ]]; then
+	APPLY_RUNTIME_CONFIG=y
+	shift
+fi
 ROOT_DIR="${ANTIZAPRET_ROOT:-/root/antizapret}"
 SYSTEMD_DIR="${ANTIZAPRET_SYSTEMD_DIR:-/etc/systemd/system}"
 cd "$ROOT_DIR"
@@ -329,7 +334,10 @@ if [[ "$DOALL_SUM1" != "$DOALL_SUM2" ]]; then
 	fi
 	echo 'Restarting doall.sh'
 	export ANTIZAPRET_DOALL_REEXECUTED=y
-	exec ./doall.sh "$1"
+	if [[ "$APPLY_RUNTIME_CONFIG" == 'y' ]]; then
+		exec ./doall.sh --apply "$@"
+	fi
+	exec ./doall.sh "$@"
 fi
 
 # Синхронизация выполняется после самообновления и возможного re-exec, чтобы
@@ -347,7 +355,40 @@ case "${1:-}" in
 	*) IPV6_LIST_MODE=auto ;;
 esac
 
-if systemctl is-active --quiet antizapret; then
+if [[ "$APPLY_RUNTIME_CONFIG" == 'y' ]]; then
+	# Установщик держит этот lock до завершения cutover. Не ждём его под
+	# update.lock: установка сама может ожидать обновление списков.
+	APPLY_SETUP_LOCK_PATH="${ANTIZAPRET_APPLY_SETUP_LOCK_PATH:-/run/antizapret-setup.lock}"
+	if ! exec {APPLY_SETUP_LOCK_FD}>> "$APPLY_SETUP_LOCK_PATH" || ! flock -n "$APPLY_SETUP_LOCK_FD"; then
+		echo 'Error: the installation lock is unavailable; runtime settings were not applied' >&2
+		exit 1
+	fi
+	# Наш lock не должен превращать старый marker в «активную установку»
+	# для штатных up/down hooks.
+	if [[ -e "${ANTIZAPRET_APPLY_CUTOVER_MARKER_PATH:-/run/antizapret-setup.defer-custom-hooks}" ]]; then
+		echo 'Error: an unfinished installation cutover was found; runtime settings were not applied' >&2
+		exit 1
+	fi
+	# Обновление списков из cron не должно перезапускать сеть. Явное
+	# применение использует штатные up/down и IPv6 hooks основной службы,
+	# не запуская отдельно остановленные OpenVPN/WireGuard/AmneziaWG units.
+	if ! systemctl is-active --quiet antizapret.service; then
+		echo 'Error: AntiZapret is stopped; runtime settings were not applied' >&2
+		exit 1
+	fi
+	./firewall6.sh refresh "$IPV6_LIST_MODE"
+	# try-restart не поднимет службу, если её остановили после проверки.
+	if ! systemctl try-restart antizapret.service; then
+		echo 'Error: AntiZapret restart failed; runtime settings were not applied' >&2
+		exit 1
+	fi
+	if ! systemctl is-active --quiet antizapret.service; then
+		echo 'Error: AntiZapret is not active after applying runtime settings' >&2
+		exit 1
+	fi
+	flock -u "$APPLY_SETUP_LOCK_FD"
+	exec {APPLY_SETUP_LOCK_FD}>&-
+elif systemctl is-active --quiet antizapret; then
 	if [[ "$FIREWALL6_CHANGED" == 'y' ]] || ! ip6tables -w -t filter -S ANTIZAPRET6-INPUT &>/dev/null; then
 		./firewall6.sh up "$IPV6_LIST_MODE"
 	else
