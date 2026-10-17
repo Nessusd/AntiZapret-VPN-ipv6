@@ -213,6 +213,8 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	# Обновляем файл deny.rpz в Knot Resolver только если файл изменился
 	if [[ -f result/deny.rpz ]] && ! diff -q result/deny.rpz /etc/knot-resolver/deny.rpz; then
 		cp -f result/deny.rpz /etc/knot-resolver/deny.rpz.tmp
+		# Публичный RPZ читает kresd, поэтому не наследуем закрытый umask root.
+		chmod 0644 /etc/knot-resolver/deny.rpz.tmp
 		mv -f /etc/knot-resolver/deny.rpz.tmp /etc/knot-resolver/deny.rpz
 		sleep 5
 	fi
@@ -220,6 +222,7 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	# Обновляем файл deny2.rpz в Knot Resolver только если файл изменился
 	if [[ -f result/deny2.rpz ]] && ! diff -q result/deny2.rpz /etc/knot-resolver/deny2.rpz; then
 		cp -f result/deny2.rpz /etc/knot-resolver/deny2.rpz.tmp
+		chmod 0644 /etc/knot-resolver/deny2.rpz.tmp
 		mv -f /etc/knot-resolver/deny2.rpz.tmp /etc/knot-resolver/deny2.rpz
 		sleep 5
 	fi
@@ -286,6 +289,7 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	# Обновляем файл proxy.rpz в Knot Resolver только если файл изменился
 	if [[ -f result/proxy.rpz ]] && ! diff -q result/proxy.rpz /etc/knot-resolver/proxy.rpz; then
 		cp -f result/proxy.rpz /etc/knot-resolver/proxy.rpz.tmp
+		chmod 0644 /etc/knot-resolver/proxy.rpz.tmp
 		mv -f /etc/knot-resolver/proxy.rpz.tmp /etc/knot-resolver/proxy.rpz
 		sleep 5
 	fi
