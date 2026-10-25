@@ -1,7 +1,7 @@
 # НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!
 # Файл автоматически сформирован внешним генератором IPv6-списков.
 # Cloudflare IPv6 prefixes
-# https://www.cloudflare.com/ips-v6
+# https://api.cloudflare.com/client/v4/ips
 
 2400:cb00::/32
 2405:8100::/32
