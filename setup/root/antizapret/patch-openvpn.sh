@@ -9,11 +9,12 @@ set -e
 export LC_ALL=C
 
 handle_error() {
+	local status=$1 line=$2 command=$3
 	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
+	echo -e "\e[1;31mError at line $line: $command (exit code $status)\e[0m"
 	exit 1
 }
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 cleanup() {
 	rm -f -- /usr/local/src/openvpn.tar.gz
@@ -109,16 +110,18 @@ link_socket_write_udp(struct link_socket *sock,\
 					struct link_socket_actual *to)\
 {\
 '"$ERROR_FREE"'\
-	ssize_t buffer_sent = 0;\
 	int opcode = *BPTR(buf) >> 3;\
 	if (opcode == 7 || opcode == 8 || opcode == 10)\
 	{\
 #ifdef ERROR_FREE\
+		ssize_t buffer_sent;\
 #ifdef _WIN32\
 		buffer_sent = link_socket_write_win32(sock, buf, to);\
 #else\
 		buffer_sent = link_socket_write_udp_posix(sock, buf, to);\
 #endif\
+		if (buffer_sent < 0)\
+			return buffer_sent;\
 		usleep(100000);\
 #endif\
 		int buffer_len = BLEN(buf);\
@@ -146,9 +149,9 @@ link_socket_write_udp(struct link_socket *sock,\
 			int data_repeat = (int)(random() % 101 + 100);\
 			for (int j = 0; j < data_repeat; j++) {\
 #ifdef _WIN32\
-				buffer_sent += link_socket_write_win32(sock, &data_buffer, to);\
+				(void)link_socket_write_win32(sock, &data_buffer, to);\
 #else\
-				buffer_sent += link_socket_write_udp_posix(sock, &data_buffer, to);\
+				(void)link_socket_write_udp_posix(sock, &data_buffer, to);\
 #endif\
 			}\
 			free_buf(&data_buffer);\
@@ -160,11 +163,10 @@ link_socket_write_udp(struct link_socket *sock,\
 #endif\
 	}\
 #ifdef _WIN32\
-	buffer_sent += link_socket_write_win32(sock, buf, to);\
+	return link_socket_write_win32(sock, buf, to);\
 #else\
-	buffer_sent += link_socket_write_udp_posix(sock, buf, to);\
+	return link_socket_write_udp_posix(sock, buf, to);\
 #endif\
-	return buffer_sent;\
 }\
 ' "$SOCKET_HEADER"
 

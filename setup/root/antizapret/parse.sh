@@ -5,11 +5,12 @@ shopt -s nullglob
 
 # Обработка ошибок
 handle_error() {
+	local status=$1 line=$2 command=$3
 	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
+	echo -e "\e[1;31mError at line $line: $command (exit code $status)\e[0m"
 	exit 1
 }
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 if [[ -n "$1" && "$1" != 'ip' && "$1" != 'ips' && "$1" != 'host' && "$1" != 'hosts' && "$1" != 'noclear' && "$1" != 'noclean' ]]; then
 	echo "Ignored invalid parameter: $1"
@@ -21,6 +22,44 @@ echo 'Parse AntiZapret VPN files:'
 cd /root/antizapret
 rm -rf temp
 mkdir -p temp result
+source setup
+
+if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" == 'noclean' ]]; then
+	# Проверяем реестр до удаления прежних результатов и публикации RPZ.
+	# Одна повреждённая запись не должна обрывать обработку всего списка.
+	if [[ -n "$(compgen -G 'download/*domain.txt')" ]]; then
+		(
+			set -o pipefail
+			sed -n 's/^[[:punct:]]\+//; s/[[:punct:]]\+$//; /\./p' download/*domain.txt |
+			python3 -c '
+import re
+import sys
+
+# В byte-locale shell кириллица не проверяется как отдельные символы.
+allowed = re.compile("[а-яa-z0-9.-]+")
+skipped = 0
+for raw in sys.stdin.buffer:
+    try:
+        candidate = raw.decode("utf-8").rstrip("\r\n").lower()
+        if not allowed.fullmatch(candidate):
+            continue
+        name = candidate.encode("idna").decode("ascii")
+    except UnicodeError:
+        skipped += 1
+        continue
+    # Проверяем длину после Punycode, а не число исходных UTF-8 байтов.
+    if len(name) > 253 or any(not label or len(label) > 63 for label in name.split(".")):
+        skipped += 1
+        continue
+    print(name)
+if skipped:
+    print(f"Skipped invalid registry domains: {skipped}", file=sys.stderr)
+'
+		) > temp/registry-hosts.txt
+	else
+		: > temp/registry-hosts.txt
+	fi
+fi
 
 # Эти устаревшие выгрузки больше не поддерживаются. Удаляем оставшиеся файлы
 # при любом режиме обновления, чтобы они не продолжали раздаваться после
@@ -59,7 +98,6 @@ case "${1:-}" in
 		mkdir -p result
 		;;
 esac
-source setup
 
 for file in config/*.txt; do
 	sed -i -e '$a\' "$file"
@@ -239,15 +277,12 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d; s/[]_~:/?#\[@!$&'\''()*+,;=].*//; s/.*/\L&/' download/*exclude-hosts.txt config/*exclude-hosts.txt | sort -u > temp/exclude-hosts.txt
 	sed -E 's/[\r[:space:]]+//g; /^[[:punct:]]/d; /^$/d; s/[]_~:/?#\[@!$&'\''()*+,;=].*//; s/.*/\L&/' download/*remove-hosts.txt config/*remove-hosts.txt | sort -u > temp/remove-hosts.txt
 
-	# Обрабатываем список заблокированных ресурсов
-	# Удаляем лишнее и преобразуем доменные имена содержащие международные символы в формат Punycode
-	[[ -n "$(compgen -G 'download/*domain.txt')" ]] && \
-	sed -n 's/^[[:punct:]]\+//; s/[[:punct:]]\+$//; /\./{s/.*/\L&/; /^[а-яa-z0-9.-]\+$/p}' download/*domain.txt \
-	| CHARSET=UTF-8 idn --no-tld >> temp/include-hosts.txt
+	# IDN уже преобразованы и проверены до начала публикации результатов.
+	cat temp/registry-hosts.txt >> temp/include-hosts.txt
 
 	# Удаляем домены казино и букмекеров
 	if [[ "$CLEAR_HOSTS" == 'y' ]]; then
-		grep -Evi '[ck]a+[szc3]+[iley1]+n+[0-9o]|[vw][uy]+[l1]+[kc]a+n|[vw]a+[vw]+a+d+a|x-*bet|most-*bet|leon-*bet|rio-*bet|mel-*bet|ramen-*bet|marathon-*bet|max-*bet|bet-*win|gg-*bet|spin-*bet|banzai-*bet|1iks-*bet|x-*slot|sloto-*zal|max-*slot|bk-*leon|gold-*fishka|play-*fortuna|dragon-*money|poker-*dom|1-*win|crypto-*bos|free-*spin|fair-*spin|no-*deposit|igrovye|avtomaty|bookmaker|zerkalo|slottica|sykaaa|admiral-*x|x-*admiral|pinup-*bet|pari-*match|betting|partypoker|jackpot|bonus|azino[0-9-]|888-*starz|zooma[0-9-]|zenit-*bet|eldorado|slots|vodka|newretro|platinum|igrat|flagman|arkada' temp/include-hosts.txt | sort -u > temp/include-hosts2.txt
+		grep -Evi '[ck]a+[szc3]+[iley1]+n+[0-9o]|[vw][uy]+[l1]+[kc]a+n|[vw]a+[vw]+a+d+a|x-*bet|most-*bet|leon-*bet|rio-*bet|mel-*bet|ramen-*bet|max-*bet|bet-*win|gg-*bet|spin-*bet|banzai-*bet|1iks-*bet|x-*slot|sloto-*zal|max-*slot|bk-*leon|gold-*fishka|play-*fortuna|dragon-*money|poker-*dom|1-*win|crypto-*bos|free-*spin|fair-*spin|no-*deposit|igrovye|avtomaty|bookmaker|slottica|sykaaa|admiral-*x|x-*admiral|pinup-*bet|pari-*match|betting|partypoker|jackpot|bonus|azino[0-9-]|888-*starz|zooma[0-9-]|zenit-*bet|eldorado|slots|vodka|newretro|platinum|igrat|flagman|arkada' temp/include-hosts.txt | sort -u > temp/include-hosts2.txt
 	else
 		sort -u temp/include-hosts.txt > temp/include-hosts2.txt
 	fi

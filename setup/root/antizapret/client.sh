@@ -11,11 +11,12 @@ export LC_ALL=C
 shopt -s nullglob
 
 handle_error() {
+	local status=$1 line=$2 command=$3
 	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
+	echo -e "\e[1;31mError at line $line: $command (exit code $status)\e[0m"
 	exit 1
 }
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 ARGUMENT_COUNT=$#
 if (( ARGUMENT_COUNT > 5 )); then

@@ -309,5 +309,9 @@ if __name__ == "__main__":
                            handler=DNSHandler)
     tcp_server.start_thread()
     print("Started Proxy Resolver: %s:%d -> %s:%d" % (args.address or "*",args.port,args.dns,args.dns_port))
-    while udp_server.isAlive():
+    # Частичный отказ оставляет DNS доступным лишь по одному протоколу.
+    # Ненулевой код позволяет systemd восстановить оба listener одним процессом.
+    while all(server.isAlive() for server in (udp_server,tcp_server)):
         time.sleep(1)
+    print("Restarting: A DNS listener thread died")
+    raise SystemExit(1)

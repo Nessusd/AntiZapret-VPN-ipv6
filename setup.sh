@@ -2270,6 +2270,84 @@ write_kresd_generated_config() {
 	mv -f "$temporary" "$destination"
 }
 
+preserve_openvpn_status_config() {
+	local previous=$1 destination=$2 temporary
+	[[ -f "$previous" ]] || return 0
+
+	# Сохраняем путь, отключённый status и явную версию; старые конфиги без
+	# status-version получают новый формат из шаблона для fallback панели.
+	temporary="$(mktemp "${destination}.status.XXXXXX")" || return 1
+	if ! awk '
+		FILENAME == ARGV[1] {
+			if ($0 ~ /^[ \t]*[#;]?[ \t]*(--)?status[ \t]+/)
+				status_lines = status_lines $0 "\n"
+			if ($0 ~ /^[ \t]*(--)?status-version[ \t]+/)
+				version_lines = version_lines $0 "\n"
+			next
+		}
+		/^[ \t]*status[ \t]+/ {
+			if (!status_written++) printf "%s", status_lines
+			next
+		}
+		/^[ \t]*status-version[ \t]+/ && version_lines != "" {
+			if (!version_written++) printf "%s", version_lines
+			next
+		}
+		{ print }
+	' "$previous" "$destination" > "$temporary" ||
+		! chmod --reference="$destination" "$temporary" ||
+		! mv -f -- "$temporary" "$destination"
+	then
+		rm -f -- "$temporary"
+		return 1
+	fi
+	sync_openvpn_status_directories "$previous" "$destination"
+}
+
+sync_openvpn_status_directories() {
+	# Live server/* заменяется целиком. Возвращаем только каталоги status,
+	# не копируя прежние логи и не создавая пути вне управляемого server.
+	python3 - "$1" "$2" "${3:-prepare}" <<'PY'
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import sys
+
+previous = Path(sys.argv[1]).parent
+destination = Path(sys.argv[2]).parent
+publish = sys.argv[3] == "publish"
+base = destination if publish else previous
+for line in Path(sys.argv[2]).read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+    if not re.match(r"^\s*(?:--)?status\s+", line):
+        continue
+    options = shlex.shlex(line, posix=True)
+    options.whitespace_split = True
+    options.commenters = ""
+    next(options, None)
+    filename = next(options, None)
+    if filename is None:
+        continue
+    path = Path(os.path.normpath(base / filename))
+    try:
+        relative = path.relative_to(base)
+    except ValueError:
+        continue
+    old_parent, new_parent = previous, destination
+    for part in relative.parent.parts:
+        old_parent, new_parent = old_parent / part, new_parent / part
+        if new_parent.exists() and not publish:
+            continue
+        metadata = old_parent.stat() if old_parent.is_dir() else None
+        if not new_parent.exists():
+            new_parent.mkdir(mode=stat.S_IMODE(metadata.st_mode) if metadata else 0o755)
+        if metadata:
+            os.chown(new_parent, metadata.st_uid, metadata.st_gid)
+            os.chmod(new_parent, stat.S_IMODE(metadata.st_mode))
+PY
+}
+
 set_dns_directives() {
 	local kind=$1 path=$2
 	shift 2
@@ -3404,7 +3482,7 @@ echo 'Installation, please wait...'
 handle_error() {
 	local status=$1 line=$2 command=$3
 	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $line: $command\e[0m"
+	echo -e "\e[1;31mError at line $line: $command (exit code $status)\e[0m"
 	exit "$status"
 }
 
@@ -3449,7 +3527,6 @@ apt-get purge -y upower
 apt-get purge -y multipath-tools
 apt-get purge -y rsyslog
 apt-get purge -y udisks2
-apt-get purge -y qemu-guest-agent
 apt-get purge -y tuned
 apt-get purge -y sysstat
 apt-get purge -y acpid
@@ -3802,6 +3879,12 @@ find /tmp/antizapret/setup/etc/openvpn/server/scripts -type f -exec chmod +x {} 
 chown -R knot-resolver:knot-resolver /var/cache/knot-resolver
 chown -R knot-resolver:knot-resolver /var/cache/knot-resolver2
 
+# После общего chmod сохраняем status-настройки и права их каталогов.
+for OPENVPN_MODE in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+	preserve_openvpn_status_config "/etc/openvpn/server/$OPENVPN_MODE.conf" \
+		"/tmp/antizapret/setup/etc/openvpn/server/$OPENVPN_MODE.conf"
+done
+
 # Штатный stop вызовет старый custom-down, пока VPN-интерфейсы ещё живы.
 # Сразу после этого гасим сами туннели и начинаем замену live-дерева.
 if ! capture_install_rollback_current_vpn_units ||
@@ -3910,6 +3993,11 @@ if [[ "$INSTALL_PANEL" == 'y' ]]; then
 	rm -rf "$PANEL_INSTALL_DIR"
 fi
 cp -r /tmp/antizapret/setup/* /
+# cp -r создаёт новые каталоги от root и может сбросить setgid.
+for OPENVPN_MODE in antizapret-udp antizapret-tcp vpn-udp vpn-tcp; do
+	sync_openvpn_status_directories "/tmp/antizapret/setup/etc/openvpn/server/$OPENVPN_MODE.conf" \
+		"/etc/openvpn/server/$OPENVPN_MODE.conf" publish
+done
 require_vpn_key_permissions /etc/openvpn/easyrsa3 /etc/wireguard
 rm -rf /tmp/dnslib
 rm -rf /tmp/antizapret

@@ -4,11 +4,12 @@ export LC_ALL=C
 
 # Обработка ошибок
 handle_error() {
+	local status=$1 line=$2 command=$3
 	echo "$(lsb_release -ds) $(uname -r) $(date --iso-8601=seconds)"
-	echo -e "\e[1;31mError at line $1: $2\e[0m"
+	echo -e "\e[1;31mError at line $line: $command (exit code $status)\e[0m"
 	exit 1
 }
-trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
+trap 'handle_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 if [[ -n "$1" && "$1" != 'ip' && "$1" != 'ips' && "$1" != 'host' && "$1" != 'hosts' && "$1" != 'noclear' && "$1" != 'noclean' ]]; then
 	echo "Ignored invalid parameter: $1"
@@ -41,6 +42,22 @@ cleanup_download_staging() {
 }
 trap cleanup_download_staging EXIT
 
+# Частичный запуск заменяет только свой класс источников. Остальные файлы,
+# которые читает parse.sh или IPv6 helper, должны пережить публикацию каталога.
+PRESERVED_DOWNLOADS=()
+case "${1:-}" in
+	ip|ips)
+		PRESERVED_DOWNLOADS=(download/*domain.txt download/*hosts.txt download/*rpz.txt download/*rpz2.txt download/*adguard.txt)
+		;;
+	host|hosts)
+		PRESERVED_DOWNLOADS=(download/*ips.txt download/*ips6.txt download/amazon-ip-ranges.json)
+		;;
+esac
+for source_file in "${PRESERVED_DOWNLOADS[@]}"; do
+	[[ -f "$source_file" ]] || continue
+	cp -p -- "$source_file" "$DOWNLOAD_STAGING/${source_file#download/}"
+done
+
 UPDATE_LINK=https://raw.githubusercontent.com/Nessusd/AntiZapret-VPN-ipv6/main/setup/root/antizapret/update.sh
 UPDATE_PATH=update.sh
 
@@ -65,11 +82,12 @@ RPZ2_PATH=download/rpz2.txt
 INCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
 INCLUDE_HOSTS_PATH=download/include-hosts.txt
 
-EXCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/exclude-ru-hosts.txt
+EXCLUDE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/exclude-hosts.txt
+EXCLUDE_RU_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/exclude-ru-hosts.txt
 EXCLUDE_HOSTS_PATH=download/exclude-hosts.txt
 
-REMOVE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/remove-hosts.txt.gz
-REMOVE_HOSTS_PATH=download/remove-hosts.txt.gz
+REMOVE_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/remove-hosts.txt
+REMOVE_HOSTS_PATH=download/remove-hosts.txt
 
 INCLUDE_ADBLOCK_HOSTS_LINK=https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-adblock-hosts.txt
 INCLUDE_ADBLOCK_HOSTS_PATH=download/include-adblock-hosts.txt
@@ -231,9 +249,9 @@ if [[ -z "$1" || "$1" == 'host' || "$1" == 'hosts' || "$1" == 'noclear' || "$1" 
 	download $REMOVE_HOSTS_PATH $REMOVE_HOSTS_LINK
 
 	if [[ "$ROUTE_ALL" == 'y' ]]; then
-		download $EXCLUDE_HOSTS_PATH $EXCLUDE_HOSTS_LINK
+		download $EXCLUDE_HOSTS_PATH $EXCLUDE_RU_HOSTS_LINK
 	else
-		printf '# НЕ РЕДАКТИРУЙТЕ ЭТОТ ФАЙЛ!' > "$DOWNLOAD_STAGING/${EXCLUDE_HOSTS_PATH#download/}"
+		download $EXCLUDE_HOSTS_PATH $EXCLUDE_HOSTS_LINK
 	fi
 
 	if [[ "$BLOCK_ADS" == 'y' ]]; then
